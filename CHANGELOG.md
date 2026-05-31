@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Multi-account progress chaining** via Drive-based progress logs to bypass limits
+- **750GB daily quota tracker** with auto-pause and resume instructions
+- **Redesigned Colab form UI** with clear sections and emojis for better UX
 - Interactive GDrive Permission Manager (share/unshare files and folders)
 - Interactive "Shared with Me" to My Drive Copier with recursive folder support
 - Batch processing with retry logic and exponential backoff

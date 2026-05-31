@@ -18,6 +18,7 @@ The notebook includes two tools:
 
 ## ✅ Key Features
 
+- **Bypass 750GB daily limits** using multi-account chaining with persistent progress logs
 - **Transfer entire folder trees** with subfolders and files preserved
 - **Batch processing** with automatic retry and exponential backoff
 - **Works with Shared Drives** (Google Workspace) and personal drives
@@ -25,6 +26,7 @@ The notebook includes two tools:
 - **Progress tracking** with real-time progress bars and logging
 - **No local software required** — runs entirely in Google Colab
 - **Configurable scope** — choose to process files only, folders only, or both
+- **Redesigned UI** with clear emojis and sections for an intuitive Colab experience
 
 ## 🖼 How It Works
 
