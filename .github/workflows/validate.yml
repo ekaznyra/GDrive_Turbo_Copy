@@ -1,0 +1,49 @@
+name: Validate Notebooks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.ipynb'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.ipynb'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate notebook JSON
+        run: |
+          echo "Validating notebook files..."
+          for notebook in $(find . -name '*.ipynb' -not -path './.git/*'); do
+            echo "Checking: $notebook"
+            python3 -c "
+          import json, sys
+          try:
+              with open('$notebook') as f:
+                  nb = json.load(f)
+              assert 'cells' in nb, 'Missing cells key'
+              assert 'metadata' in nb, 'Missing metadata key'
+              for i, cell in enumerate(nb['cells']):
+                  assert 'cell_type' in cell, f'Cell {i} missing cell_type'
+                  assert 'source' in cell, f'Cell {i} missing source'
+              print(f'  ✅ Valid ({len(nb[\"cells\"])} cells)')
+          except Exception as e:
+              print(f'  ❌ Invalid: {e}')
+              sys.exit(1)
+          "
+          done
+          echo "All notebooks validated successfully."
