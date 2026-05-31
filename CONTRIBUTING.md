@@ -6,7 +6,7 @@ Thank you for your interest in contributing! This guide explains how you can hel
 
 ### Reporting Bugs
 
-If you encounter a bug, please [open an issue](https://github.com/mnoumanhanif/google-drive-transfer-colab/issues/new?template=bug_report.md) and include:
+If you encounter a bug, please [open an issue](https://github.com/ekaznyra/GDrive_Turbo_Copy/issues/new?template=bug_report.md) and include:
 
 - A clear description of the problem
 - Steps to reproduce the issue
@@ -16,7 +16,7 @@ If you encounter a bug, please [open an issue](https://github.com/mnoumanhanif/g
 
 ### Suggesting Features
 
-Have an idea for an improvement? [Open a feature request](https://github.com/mnoumanhanif/google-drive-transfer-colab/issues/new?template=feature_request.md) and describe:
+Have an idea for an improvement? [Open a feature request](https://github.com/ekaznyra/GDrive_Turbo_Copy/issues/new?template=feature_request.md) and describe:
 
 - The problem you want to solve
 - Your proposed solution
@@ -73,4 +73,4 @@ Please be respectful and constructive in all interactions. We are committed to p
 
 ## Questions?
 
-If you have questions about contributing, feel free to [open an issue](https://github.com/mnoumanhanif/google-drive-transfer-colab/issues) and we'll be happy to help.
+If you have questions about contributing, feel free to [open an issue](https://github.com/ekaznyra/GDrive_Turbo_Copy/issues) and we'll be happy to help.

@@ -2,7 +2,7 @@
 
 Transfer files and folders between Google Drive accounts — without downloading or re-uploading — using a free Google Colab notebook.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/mnoumanhanif/google-drive-transfer-colab/blob/main/google_drive_transfer.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ekaznyra/GDrive_Turbo_Copy/blob/main/google_drive_transfer.ipynb)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -49,7 +49,7 @@ The notebook includes two tools:
 ## 📁 Project Structure
 
 ```
-google-drive-transfer-colab/
+GDrive_Turbo_Copy/
 ├── google_drive_transfer.ipynb   # Main Colab notebook
 ├── docs/
 │   ├── setup.md                  # Detailed setup guide
@@ -82,7 +82,7 @@ No local installation is required. The notebook runs in the cloud via Google Col
 
 1. **Open the notebook** by clicking the badge below:
 
-   [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/mnoumanhanif/google-drive-transfer-colab/blob/main/google_drive_transfer.ipynb)
+   [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ekaznyra/GDrive_Turbo_Copy/blob/main/google_drive_transfer.ipynb)
 
 2. **Authenticate** when prompted — sign in with the Google account that has the files you want to transfer.
 
@@ -135,10 +135,6 @@ To manually test:
 
 Contributions are welcome! Please read the [Contributing Guide](CONTRIBUTING.md) for details on how to submit pull requests, report issues, and suggest improvements.
 
-## 📹 Related Tutorials
-
-- [How to Transfer Google Drive Files to Another Account (3 EASY Methods!)](https://youtu.be/u-dV87jdD9s) — TechData 360
-- [This Google Drive Trick Will Save You HOURS ⏳ | 1-Click File Transfer](https://youtu.be/56BNgZqqCyk) — TechData 360
 
 ## 🛡 License
 
@@ -146,6 +142,5 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## 👤 Author
 
-**Muhammad Nouman Hanif**
-- YouTube: [TechData 360](https://www.youtube.com/@TechData360)
-- GitHub: [@mnoumanhanif](https://github.com/mnoumanhanif)
+**ekaznyra**
+- GitHub: [@ekaznyra](https://github.com/ekaznyra)

@@ -16,11 +16,11 @@ This guide walks you through setting up and running the Google Drive Transfer no
 
 Click the badge to open the notebook directly in Google Colab:
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/mnoumanhanif/google-drive-transfer-colab/blob/main/google_drive_transfer.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ekaznyra/GDrive_Turbo_Copy/blob/main/google_drive_transfer.ipynb)
 
 ### Option 2: From GitHub
 
-1. Navigate to the [repository on GitHub](https://github.com/mnoumanhanif/google-drive-transfer-colab)
+1. Navigate to the [repository on GitHub](https://github.com/ekaznyra/GDrive_Turbo_Copy)
 2. Click on `google_drive_transfer.ipynb`
 3. Click the "Open in Colab" button at the top of the notebook preview
 
