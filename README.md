@@ -1,148 +1,44 @@
-# 🚀 Google Drive Transfer using Google Colab
+# Copy Folder Google Drive to Google Drive - 1TouchPro
+<a href="https://colab.research.google.com/github/nqthaivl/Copy-Folder-Google-Drive-to-Google-Drive/blob/main/Copy_Folder_Google_Drive_to_Google_Drive.ipynb"><img data-canonical-src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab" src="https://camo.githubusercontent.com/f5e0d0538a9c2972b5d413e0ace04cecd8efd828d133133933dfffec282a4e1b/68747470733a2f2f636f6c61622e72657365617263682e676f6f676c652e636f6d2f6173736574732f636f6c61622d62616467652e737667"></a>
+## Giới thiệu
 
-Transfer files and folders between Google Drive accounts — without downloading or re-uploading — using a free Google Colab notebook.
+Chào mừng bạn đến với dự án "Copy Folder Google Drive to Google Drive - 1TouchPro". Dự án này giúp bạn sao chép toàn bộ nội dung của một thư mục trên Google Drive sang một thư mục khác trên cùng Google Drive hoặc tài khoản Google Drive khác.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ekaznyra/GDrive_Turbo_Copy/blob/main/GDrive_Turbo_Copy.ipynb)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+## Hướng dẫn sử dụng
 
----
+### 1. Yêu cầu
 
-## 📖 Description
+- Tài khoản Google.
+- Quyền truy cập vào Google Drive API.
+- Google Colab (hoặc môi trường hỗ trợ IPython Notebook).
 
-This project provides a Google Colab notebook that lets you transfer files and folders from one Google Drive account to another without manual downloading and re-uploading. It uses the Google Drive API v3 to perform server-side operations, making transfers fast and efficient regardless of file size.
+### 2. Chuẩn bị
 
-The notebook includes two tools:
+Để chạy mã nguồn, hãy làm theo các bước sau:
 
-1. **Permission Manager** — Share or unshare files and folders (including Shared Drive content) with another Google account.
-2. **Shared with Me Copier** — Copy files and entire folder structures from your "Shared with me" list into your own "My Drive".
+1. **Cài đặt Thư viện:**
+   Không cần cài đặt thêm thư viện ngoài những gì có sẵn trong Google Colab.
 
-## ✅ Key Features
+2. **Nhập thông tin đầu vào:**
 
-- **Bypass 750GB daily limits** using multi-account chaining with persistent progress logs
-- **Transfer entire folder trees** with subfolders and files preserved
-- **Batch processing** with automatic retry and exponential backoff
-- **Works with Shared Drives** (Google Workspace) and personal drives
-- **Skip existing items** to avoid duplicate copies on re-runs
-- **Progress tracking** with real-time progress bars and logging
-- **No local software required** — runs entirely in Google Colab
-- **Configurable scope** — choose to process files only, folders only, or both
-- **Redesigned UI** with clear emojis and sections for an intuitive Colab experience
+   - **Drive đích (dest_text):** Nhập liên kết đến thư mục trên Google Drive mà bạn muốn sao chép đến.
+   - **Drive nguồn (source_text):** Nhập liên kết đến thư mục Google Drive mà bạn muốn sao chép từ đó.
+   - **Từ trang (from_page):** Số trang đầu tiên để bắt đầu sao chép. Đặt là 0 nếu không phân trang.
+   - **Đến trang (to_page):** Số trang cuối cùng để dừng sao chép. Đặt là 0 nếu không phân trang.
+   - **Dung lượng tối đa (max_download_size_text):** Dung lượng tối đa (GB) cho phép sao chép. Chương trình sẽ dừng nếu tổng dung lượng vượt quá giá trị này.
+   - **Loại bỏ (exclude_str_text):** Các chuỗi cần loại bỏ khỏi tên file hoặc thư mục trong quá trình sao chép. Nhiều chuỗi có thể được phân cách bằng dấu phẩy.
 
-## 🖼 How It Works
+### 3. Chạy Mã Nguồn
 
-```
-┌──────────────────┐                          ┌──────────────────┐
-│  Source Account   │   Google Drive API v3    │   Destination    │
-│  (Google Drive)   │ ──────────────────────▶  │   Account        │
-│                   │   Server-side transfer   │   (Google Drive)  │
-└──────────────────┘   via Google Colab        └──────────────────┘
-```
+Sau khi nhập tất cả các thông tin cần thiết, chạy đoạn mã sau:
 
-## 🛠 Tech Stack
+```python
+destDriveLink = dest_text.value
+sourceDriveLink = source_text.value
+fromPage = int(from_page_text.value)
+toPage = int(to_page_text.value)
 
-| Component        | Technology                                                    |
-|------------------|---------------------------------------------------------------|
-| Runtime          | [Google Colab](https://colab.research.google.com/)            |
-| Language         | Python 3                                                      |
-| API              | [Google Drive API v3](https://developers.google.com/drive/api)|
-| Authentication   | Google OAuth 2.0 (via `google.colab.auth`)                    |
-| Key Libraries    | `google-api-python-client`, `google-auth`, `tqdm`             |
-
-## 📁 Project Structure
-
-```
-GDrive_Turbo_Copy/
-├── GDrive_Turbo_Copy.ipynb   # Main Colab notebook
-├── docs/
-│   ├── setup.md                  # Detailed setup guide
-│   └── usage.md                  # Usage guide and examples
-├── .github/
-│   ├── workflows/
-│   │   └── validate.yml          # CI workflow for notebook validation
-│   ├── ISSUE_TEMPLATE/
-│   │   ├── bug_report.md         # Bug report template
-│   │   └── feature_request.md    # Feature request template
-│   └── PULL_REQUEST_TEMPLATE.md  # PR template
-├── CONTRIBUTING.md               # Contribution guidelines
-├── CHANGELOG.md                  # Version history
-├── LICENSE                       # MIT License
-├── .gitignore                    # Git ignore rules
-└── README.md                     # This file
-```
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- A Google account (source account with files to transfer)
-- A Google account (destination account to receive files)
-- A web browser with access to [Google Colab](https://colab.research.google.com/)
-
-### Installation
-
-No local installation is required. The notebook runs in the cloud via Google Colab.
-
-1. **Open the notebook** by clicking the badge below:
-
-   [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ekaznyra/GDrive_Turbo_Copy/blob/main/GDrive_Turbo_Copy.ipynb)
-
-2. **Authenticate** when prompted — sign in with the Google account that has the files you want to transfer.
-
-3. **Configure** the transfer parameters using the interactive form fields.
-
-4. **Run the cells** to start the transfer.
-
-> For detailed step-by-step instructions, see [docs/setup.md](docs/setup.md) and [docs/usage.md](docs/usage.md).
-
-## 📋 Usage Examples
-
-### Example 1: Share a Folder with Another User
-
-1. Open the notebook in Colab
-2. Run the **Permission Manager** cell
-3. Set **Action** to `Share`
-4. Enter the folder path (e.g., `/My Project Folder`)
-5. Enter the recipient's email address
-6. Choose the role (`writer`, `commenter`, or `reader`)
-7. Run the cell
-
-### Example 2: Copy "Shared with Me" Files to Your Drive
-
-1. Open the notebook in Colab
-2. Run the **Shared with Me Copier** cell
-3. Optionally enter a specific item name (or leave blank to copy all)
-4. Enter a destination folder name (or leave blank for root)
-5. Run the cell
-
-> See [docs/usage.md](docs/usage.md) for more examples and advanced configuration.
-
-## 🧠 Use Cases
-
-- Moving files before losing access to a school or work account
-- Transferring file ownership between personal accounts
-- Backing up shared Drive folders to your own account
-- Bulk sharing or unsharing files across teams
-
-## 🧪 Testing
-
-Since this project is a Google Colab notebook that interacts with Google Drive APIs, automated unit testing is not directly applicable. The CI workflow validates notebook structure and syntax.
-
-To manually test:
-
-1. Open the notebook in Google Colab
-2. Run each cell and verify the output
-3. Confirm that files are transferred/shared as expected
-
-## 🤝 Contributing
-
-Contributions are welcome! Please read the [Contributing Guide](CONTRIBUTING.md) for details on how to submit pull requests, report issues, and suggest improvements.
-
-
-## 🛡 License
-
-This project is licensed under the [MIT License](LICENSE).
-
-## 👤 Author
-
-**ekaznyra**
-- GitHub: [@ekaznyra](https://github.com/ekaznyra)
+downloader = DownloadFromDrive()
+downloader._limit_size = float(max_download_size_text.value)
+downloader.excluded_strings = [ext.strip() for ext in exclude_str_text.value.split(",") if ext.strip()]
+downloader.copy_drive_to_drive(destDriveLink, sourceDriveLink, fromPage, toPage)
