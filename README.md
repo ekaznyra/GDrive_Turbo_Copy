@@ -2,7 +2,7 @@
 
 # ☁️ Copy Folder Google Drive → Google Drive
 
-### 1TouchPro · Sao chép toàn bộ thư mục Drive sang Drive, kể cả khác tài khoản
+### Sao chép toàn bộ thư mục Drive sang Drive, kể cả khác tài khoản
 
 <a href="https://colab.research.google.com/github/nqthaivl/Copy-Folder-Google-Drive-to-Google-Drive/blob/main/Copy_Folder_Google_Drive_to_Google_Drive.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab">
@@ -176,8 +176,6 @@ Mặc định `4` là cân bằng tốt (giống rclone). Tăng lên `8` để n
 ---
 
 <div align="center">
-
-**Made with ☁️ by 1TouchPro**
 
 Nếu thấy hữu ích, hãy ⭐ repo để ủng hộ nhé!
 
