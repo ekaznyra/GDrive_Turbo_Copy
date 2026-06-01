@@ -1,6 +1,6 @@
 <div align="center">
 
-# ☁️ Copy Folder Google Drive → Google Drive
+# ⚡ GDrive_Turbo_Copy
 
 ### Sao chép toàn bộ thư mục Drive sang Drive, kể cả khác tài khoản
 
@@ -32,7 +32,7 @@
 
 ## 🎯 Giới thiệu
 
-**Copy Folder Google Drive to Google Drive** là một notebook Google Colab giúp bạn sao chép **toàn bộ nội dung** của một thư mục Google Drive sang thư mục khác — trên **cùng tài khoản** hoặc **giữa nhiều tài khoản** khác nhau.
+**GDrive_Turbo_Copy** là một notebook Google Colab giúp bạn sao chép **toàn bộ nội dung** của một thư mục Google Drive sang thư mục khác — trên **cùng tài khoản** hoặc **giữa nhiều tài khoản** khác nhau.
 
 Công cụ chạy hoàn toàn trên Colab, **không cần cài đặt gì thêm**, và được thiết kế để vượt qua giới hạn tải lên 750 GB/ngày của Google bằng cách chia việc cho nhiều tài khoản và tự động tiếp tục phần dở dang.
 
