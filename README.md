@@ -4,7 +4,7 @@
 
 ### Copy nguyên thư mục Google Drive sang Google Drive bằng Google Colab
 
-<a href="https://colab.research.google.com/github/nqthaivl/Copy-Folder-Google-Drive-to-Google-Drive/blob/main/GDrive_Turbo_Copy.ipynb" target="_blank">
+<a href="https://colab.research.google.com/github/ekaznyra/GDrive_Turbo_Copy/blob/main/GDrive_Turbo_Copy.ipynb" target="_blank">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab">
 </a>
 
