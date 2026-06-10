@@ -63,7 +63,7 @@ Không cần cài đặt thủ công: các thư viện cần thiết như `googl
 | ♻️ Retry lỗi tạm thời | Tự retry lỗi rate limit/server error bằng exponential backoff + jitter. |
 | 💾 Resume log | Ghi tiến độ vào `.gdrive_copy_resume.*.json` trong thư mục đích. |
 | 🛡️ Log an toàn hơn | Không public log mặc định; chỉ public khi bạn bật tùy chọn. |
-| 📊 Tiến độ | In tiến độ định kỳ và tổng kết file lỗi cuối phiên. |
+| 📊 Dashboard tiến độ | Giao diện Glassmorphism sang trọng. Bảng theo dõi hiển thị tốc độ MB/s, dung lượng, số lượng file tự động "nhảy số" theo thời gian thực cực mượt. |
 
 ---
 
@@ -76,7 +76,7 @@ Không cần cài đặt thủ công: các thư viện cần thiết như `googl
 5. Nếu chưa chắc, bật **Dry-run** để kiểm tra trước.
 6. Chạy cell **Run**.
 7. Xác thực tài khoản Google khi Colab yêu cầu.
-8. Theo dõi log trong output cho đến khi hoàn tất hoặc dừng vì quota/hạn mức.
+8. Theo dõi tiến độ sao chép thông qua màn hình **Dashboard Nhảy Số** (hiển thị tốc độ, dung lượng, số file) cho đến khi hoàn tất hoặc dừng vì hạn mức.
 
 > Mẹo: nên test với một folder nhỏ hoặc bật **Dry-run** trước khi copy folder lớn.
 
