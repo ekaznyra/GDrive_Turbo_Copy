@@ -293,6 +293,9 @@ class Copier:
         *,
         parent_source_id: str,
     ) -> None:
+        if self.config.fast_list:
+            self._process_level_fast(dest_parent_id, children, visited, parent_source_id=parent_source_id)
+            return
         index = self._build_index(dest_parent_id)
         for src in children:
             if self._stop.is_set():
@@ -301,6 +304,135 @@ class Copier:
                 self._handle_container(dest_parent_id, src, index, visited, parent_source_id)
             else:
                 self._submit_file(dest_parent_id, src, index, parent_source_id)
+
+    def _process_level_fast(
+        self,
+        dest_parent_id: str | None,
+        children: list[DriveFile],
+        visited: set[str],
+        *,
+        parent_source_id: str,
+    ) -> None:
+        """Like _process_level, but lists all sibling subfolders' children in
+        batched multi-parent queries (with a per-parent fallback so nothing is
+        silently skipped). Default-path behavior is untouched."""
+        index = self._build_index(dest_parent_id)
+        pending: list[tuple[DriveFile, str | None, str | None]] = []
+        for src in children:
+            if self._stop.is_set():
+                break
+            if src.is_shortcut:
+                target = self._resolve_shortcut(src)
+                if target is None:
+                    self._record_failed(
+                        src, reason="cannotAccessShortcutTarget",
+                        message="Shortcut target is inaccessible.",
+                        parent_source_id=parent_source_id, source_shortcut_id=src.id,
+                        shortcut_target_id=src.shortcut_target_id, effective_source_id=src.id,
+                    )
+                    continue
+                if target.is_folder:
+                    self._enqueue_folder(target, src.id, dest_parent_id, visited, parent_source_id, pending)
+                else:
+                    self._copy_file(dest_parent_id, target, index, parent_source_id, shortcut_id=src.id)
+            elif src.is_folder:
+                self._enqueue_folder(src, None, dest_parent_id, visited, parent_source_id, pending)
+            else:
+                self._submit_file(dest_parent_id, src, index, parent_source_id)
+
+        if not pending or self._stop.is_set():
+            return
+        child_map = self._batched_list([f for (f, _, _) in pending])
+        for folder, _shortcut_id, sub_dest_id in pending:
+            if self._stop.is_set():
+                break
+            kids = child_map.get(folder.id, [])
+            if kids and (sub_dest_id or self.config.dry_run):
+                self._process_level(
+                    sub_dest_id, kids, visited | {folder.id}, parent_source_id=folder.id
+                )
+
+    def _enqueue_folder(
+        self, folder, shortcut_id, dest_parent_id, visited, parent_source_id, pending
+    ) -> None:
+        if folder.id in visited:
+            log_event(self.log, logging.WARNING, "shortcut_loop_skipped", folder=folder.name, id=folder.id)
+            return
+        log_event(self.log, logging.INFO, "folder_enter", name=folder.name)
+        try:
+            sub_dest_id = self._get_or_create_folder(
+                dest_parent_id, folder.name, source_folder_id=folder.id, shortcut_id=shortcut_id
+            )
+        except QuotaStopped:
+            raise
+        except RuntimeError as exc:
+            self._record_failed(
+                folder, reason="createFolderFailed", message=str(exc),
+                parent_source_id=parent_source_id, source_shortcut_id=shortcut_id,
+                effective_source_id=shortcut_id or folder.id,
+            )
+            return
+        pending.append((folder, shortcut_id, sub_dest_id))
+
+    def _batched_list(self, folders: list[DriveFile]) -> dict[str, list[DriveFile]]:
+        """Return {source_folder_id: children}. Batches up to 50 folders per
+        multi-parent query; falls back to single-folder listing whenever a batch
+        is empty or a parent has no results, so no folder is ever silently
+        skipped (Drive can return empty for multi-parent `or` queries)."""
+        ids = [f.id for f in folders]
+        result: dict[str, list[DriveFile]] = {}
+        batch = 50
+        for i in range(0, len(ids), batch):
+            if self._stop.is_set():
+                break
+            group = ids[i : i + batch]
+            batched: dict[str, list[DriveFile]] | None
+            try:
+                batched = self._list_multi_pages(group)
+            except QuotaStopped:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self._raise_if_fatal_quota(exc, "fast-list listing")
+                log_event(self.log, logging.WARNING, "fastlist_failed_fallback", error=str(exc))
+                batched = None
+            if batched is None:
+                # Batch failed (non-quota). Re-list each folder singly; any that
+                # also fail are recorded by _list_children (failed item +
+                # had_listing_errors), so a failed listing is never mistaken for
+                # an empty folder.
+                for fid in group:
+                    result[fid] = self._list_children(fid, 0, 0, parent_source_id=fid)
+                continue
+            if len(group) > 1 and not any(batched.values()):
+                # Whole multi-parent batch empty -> untrustworthy; re-list singly.
+                for fid in group:
+                    result[fid] = self._list_children(fid, 0, 0, parent_source_id=fid)
+                continue
+            for fid in group:
+                got = batched.get(fid) or []
+                # A parent that came back empty in a multi-parent batch is
+                # re-confirmed individually (guards Drive's flaky empty OR).
+                result[fid] = got if got else self._list_children(fid, 0, 0, parent_source_id=fid)
+        return result
+
+    def _list_multi_pages(self, group: list[str]) -> dict[str, list[DriveFile]]:
+        out: dict[str, list[DriveFile]] = {fid: [] for fid in group}
+        group_set = set(group)
+        page_token: str | None = None
+        while True:
+            files, page_token = self.client.list_children_multi(
+                group, exclude_substrings=self.config.exclude_substrings, page_token=page_token
+            )
+            for f in files:
+                df = DriveFile.from_api(f)
+                # Add to EVERY matching parent (a legacy multi-parent file lives
+                # under each; the default path copies it under each too). No break.
+                for pid in f.get("parents") or []:
+                    if pid in group_set:
+                        out[pid].append(df)
+            if not page_token:
+                break
+        return out
 
     def _handle_container(
         self,

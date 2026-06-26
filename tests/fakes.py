@@ -53,6 +53,8 @@ class FakeDriveClient:
         self.create_calls = 0
         self.create_error_on_call: int | None = None
         self.create_error: Exception | None = None
+        self.multi_returns_empty = False  # simulate Drive's flaky empty multi-parent OR
+        self.multi_calls = 0
 
     # -- builders (test helpers) -------------------------------------------
 
@@ -70,12 +72,13 @@ class FakeDriveClient:
         }
         return fid
 
-    def add_file(self, name, parent, *, size=None, md5=None, mime="application/octet-stream", app_properties=None, id=None, modified=None, created=None, description=None) -> str:
+    def add_file(self, name, parent, *, size=None, md5=None, mime="application/octet-stream", app_properties=None, id=None, modified=None, created=None, description=None, extra_parents=None) -> str:
         fid = id or self._new_id("file")
+        parents = ([parent] if parent else []) + list(extra_parents or [])
         self.nodes[fid] = {
             "id": fid, "name": name, "mimeType": mime,
             "size": (str(size) if size is not None else None), "md5Checksum": md5,
-            "parents": [parent] if parent else [], "appProperties": dict(app_properties or {}),
+            "parents": parents, "appProperties": dict(app_properties or {}),
             "trashed": False,
             "modifiedTime": modified, "createdTime": created, "description": description,
         }
@@ -99,6 +102,24 @@ class FakeDriveClient:
             if node.get("trashed"):
                 continue
             if folder_id not in (node.get("parents") or []):
+                continue
+            if any(sub in node.get("name", "") for sub in excludes):
+                continue
+            out.append(dict(node))
+        out.sort(key=lambda n: (n.get("name", ""), n["id"]))
+        return out, None
+
+    def list_children_multi(self, parent_ids, *, exclude_substrings=(), page_token=None):
+        self.multi_calls += 1
+        if self.multi_returns_empty:
+            return [], None  # Drive sometimes returns nothing for a multi-parent OR
+        excludes = [s for s in exclude_substrings if s]
+        pset = set(parent_ids)
+        out = []
+        for node in self.nodes.values():
+            if node.get("trashed"):
+                continue
+            if not (set(node.get("parents") or []) & pset):
                 continue
             if any(sub in node.get("name", "") for sub in excludes):
                 continue

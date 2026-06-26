@@ -70,6 +70,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pin the copy's head revision against auto-pruning (binary files; uses storage).",
     )
     parser.add_argument(
+        "--fast-list", action="store_true",
+        help="Batch sibling folders into one list call (faster on wide trees; opt-in).",
+    )
+    parser.add_argument(
         "--no-colab", action="store_true",
         help="Skip Colab auth; use ADC / service-account credentials.",
     )
@@ -95,6 +99,7 @@ def config_from_args(args: argparse.Namespace) -> CopyConfig:
         preserve_metadata=not args.no_preserve_metadata,
         ignore_default_visibility=args.ignore_default_visibility,
         keep_revision_forever=args.keep_revision_forever,
+        fast_list=args.fast_list,
     )
 
 

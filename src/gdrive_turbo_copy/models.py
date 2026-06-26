@@ -170,6 +170,7 @@ class CopyConfig:
     preserve_metadata: bool = True  # copy modifiedTime/createdTime/description
     ignore_default_visibility: bool = False  # opt-in: bypass domain default sharing
     keep_revision_forever: bool = False  # opt-in: pin the copy's head revision
+    fast_list: bool = False  # opt-in: batch sibling folders into one list call
 
     def validate(self) -> list[str]:
         from .urls import extract_folder_id
@@ -284,6 +285,14 @@ class DriveClientProtocol(Protocol):
         *,
         exclude_substrings: Iterable[str] = (),
         order_by: str | None = None,
+        page_token: str | None = None,
+    ) -> tuple[list[dict], str | None]: ...
+
+    def list_children_multi(
+        self,
+        parent_ids: list[str],
+        *,
+        exclude_substrings: Iterable[str] = (),
         page_token: str | None = None,
     ) -> tuple[list[dict], str | None]: ...
 

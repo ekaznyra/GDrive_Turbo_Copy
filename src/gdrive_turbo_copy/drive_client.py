@@ -28,6 +28,7 @@ _FILE_SUBFIELDS = (
     "modifiedTime,createdTime,description"
 )
 _LIST_FIELDS = f"files({_FILE_SUBFIELDS}),nextPageToken"
+_LIST_FIELDS_WITH_PARENTS = f"files({_FILE_SUBFIELDS},parents),nextPageToken"
 _FILE_FIELDS = f"{_FILE_SUBFIELDS},parents"
 
 
@@ -116,6 +117,36 @@ class DriveClient:
                 orderBy=order_by or "name, createdTime",
                 pageSize=1000,
                 fields=_LIST_FIELDS,
+                pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            )
+
+        res = self._run(OperationType.LIST, build)
+        return res.get("files", []), res.get("nextPageToken")
+
+    def list_children_multi(
+        self,
+        parent_ids: list[str],
+        *,
+        exclude_substrings: Iterable[str] = (),
+        page_token: str | None = None,
+    ):
+        # OR the parents into one query (rclone-style fast-list). Results carry
+        # `parents` so the caller can map each file back to its source folder.
+        parent_clause = " or ".join(f"'{_escape(pid)}' in parents" for pid in parent_ids)
+        query = f"({parent_clause}) and trashed = false"
+        excludes = [s for s in exclude_substrings if s]
+        if excludes:
+            clause = " and ".join(f"not name contains '{_escape(s)}'" for s in excludes)
+            query += f" and ({clause})"
+
+        def build():
+            return self._svc().files().list(
+                q=query,
+                orderBy="name, createdTime",
+                pageSize=1000,
+                fields=_LIST_FIELDS_WITH_PARENTS,
                 pageToken=page_token,
                 supportsAllDrives=True,
                 includeItemsFromAllDrives=True,

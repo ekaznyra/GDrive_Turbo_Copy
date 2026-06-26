@@ -96,6 +96,7 @@ Key flags:
 | `--no-preserve-metadata` | off | Don't copy `modifiedTime`/`createdTime`/`description`. |
 | `--ignore-default-visibility` | off | Bypass a domain default-sharing policy on the copies. |
 | `--keep-revision-forever` | off | Pin the copy's head revision (binary files; uses storage). |
+| `--fast-list` | off | Batch sibling folders into one list call — faster on wide trees (opt-in). |
 | `--dry-run` | off | Preview only. |
 
 ## Resume & idempotency
@@ -125,9 +126,10 @@ ruff check src tests   # lint
 
 These were evaluated against open-source tooling and intentionally left out for now (correctness/effort trade-offs); contributions welcome:
 
-- **Multi-parent fast-list** (rclone `--fast-list`): batches sibling folders into one `files.list`. Big speedup on wide trees, but requires a careful empty-result fallback (Drive can return zero items for a multi-parent `or` query) to avoid silently skipping folders.
 - **Mid-folder resume cursor**: persist each folder's `pageToken` so a crash inside a huge folder resumes mid-page instead of re-listing it.
 - **Shared-drive `corpora=drive` scoping** and **gzip transport** tuning (efficiency only).
+
+> **Fast-list is now implemented** (`--fast-list`, opt-in): it ORs up to 50 sibling folders into one `files.list` to cut enumeration time on wide trees. It includes the mandatory safety net — if a multi-parent batch returns empty or a parent yields no rows, those folders are re-listed individually, so a folder is **never silently skipped**.
 
 ## Troubleshooting
 
