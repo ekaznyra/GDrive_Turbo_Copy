@@ -2,45 +2,124 @@
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ekaznyra/GDrive_Turbo_Copy/blob/main/GDrive_Turbo_Copy.ipynb)
 [![CI](https://github.com/ekaznyra/GDrive_Turbo_Copy/actions/workflows/ci.yml/badge.svg)](https://github.com/ekaznyra/GDrive_Turbo_Copy/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-> Sao chép thư mục Google Drive **siêu tốc** (server-side), hỗ trợ **đa luồng**, **resume** khi bị ngắt, kiểm tra trùng và **xác minh sau khi copy**.
-> Fast, **server-side** Google Drive folder-to-folder copier with multi-threading, resume, duplicate detection and post-copy verification.
+> **Sao chép thư mục Google Drive → Google Drive siêu tốc** — server-side (không tốn băng thông), đa luồng, **resume** khi bị ngắt, chống trùng và **xác minh sau khi copy**.
+>
+> A fast, **server-side** Google Drive folder-to-folder copier: no download bandwidth, multi-threaded, resumable, idempotent, and verified after every copy.
 
-**⚠️ Legal / pháp lý:** Chỉ sao chép dữ liệu bạn **có quyền hợp pháp** truy cập. Công cụ **không** sao chép *permissions, comments, revision history*. Không có cơ chế vượt quota hay lạm dụng nhiều tài khoản.
+**⚠️ Legal / pháp lý:** Chỉ sao chép dữ liệu bạn **có quyền hợp pháp** truy cập. Công cụ **không** copy *permissions, comments, revision history*, và **không** có cơ chế vượt quota hay lạm dụng nhiều tài khoản.
 
 ---
 
-## What it does
+## Table of contents
 
-- **Server-side copy** via the Drive API (`files.copy`) — Google copies on its servers, so **no download/upload bandwidth** is consumed.
-- **Shared Drive support** (`supportsAllDrives` / `includeItemsFromAllDrives`).
-- **Recursive folder tree** rebuild (folders can't be "copied" by the API, so the tree is recreated and files copied into it).
-- **Resume after interruption** via a schema-versioned, integrity-hashed JSON log stored in the destination.
-- **Idempotency** through `appProperties` (`source_file_id`, `source_md5`, `copied_by_tool`) plus checksum / name+size duplicate detection.
-- **Post-copy verification**: every copy's metadata is fetched and checked (appProperties, name, MIME, and md5/size when available) before it's marked done.
-- **Adaptive concurrency**: workers back off automatically on rate limits and recover after stable success; list / copy / create-folder / log-update operations are throttled separately.
-- **Proactive rate pacing** (token bucket): a steady client-side floor (default ~10 req/s) so most `rateLimitExceeded`/429s never happen — not just reactive backoff.
-- **Metadata fidelity**: preserves `modifiedTime` and `description` on each copy (set in the copy body, no extra round-trip); `createdTime` is sent best-effort (Drive often assigns a fresh creation time on copy).
-- **Rate-limit circuit breaker**: after sustained per-copy throttling, stops gracefully (likely the daily/server-side-copy cap) instead of hammering for 24h.
-- **Safe daily-quota guard**: stops *before* the configured byte budget (default **730 GB**), reserving bytes under a lock so concurrent workers can't overshoot.
-- **Preflight**: fails fast if the destination folder isn't writable, before building a partial tree.
-- **Dry-run** preview and a **`failed_report.json`** for anything that couldn't be copied.
+- [Quick start](#quick-start)
+- [Why it's fast and safe](#why-its-fast-and-safe)
+- [How a copy works](#how-a-copy-works)
+- [Architecture](#architecture)
+- [Install](#install)
+- [Colab usage](#colab-usage)
+- [CLI usage](#cli-usage)
+- [Resume & idempotency](#resume--idempotency)
+- [Safety & non-goals](#safety--non-goals)
+- [How it compares](#how-it-compares)
+- [Running tests](#running-tests)
+- [Limitations](#limitations)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
-> Inspired by best practices from open-source Drive tooling (rclone's pacer/metadata handling, the gdrive-copy resume pattern, official Drive API guidance). It deliberately does **not** implement multi-account/service-account rotation, `quotaUser` tricks, or any other quota-evasion mechanism.
+## Quick start
+
+**Colab (no install):** open the [notebook](https://colab.research.google.com/github/ekaznyra/GDrive_Turbo_Copy/blob/main/GDrive_Turbo_Copy.ipynb) → run **Install** → paste your **source** and **destination** folder links in **Input** → run **Run**.
+
+**CLI:**
+
+```bash
+pip install "git+https://github.com/ekaznyra/GDrive_Turbo_Copy.git"
+
+gdrive-turbo-copy \
+  --source "https://drive.google.com/drive/folders/SOURCE_ID" \
+  --dest   "https://drive.google.com/drive/folders/DEST_ID" \
+  --dry-run          # preview first; drop this to actually copy
+```
+
+Interrupted? Just run the same command again — it resumes and skips what's already copied.
+
+## Why it's fast and safe
+
+| Fast 🚀 | Safe 🛡️ |
+|---|---|
+| **Server-side `files.copy`** — Google copies on its servers, zero download/upload bandwidth | **Idempotent**: re-runs detect & skip copied items via `appProperties` even if the log is gone |
+| **Multi-threaded** (1–16 workers) with **adaptive** back-off/recovery | **Post-copy verification** of every file (id / name / MIME / md5 / size) before marking done |
+| **Proactive rate pacing** (token bucket, ~10 req/s) so most 429s never happen | **Resume log** is schema-versioned, **SHA-256 integrity-hashed**, written atomically |
+| **`--fast-list`** ORs up to 50 sibling folders into one list call on wide trees | **Quota guard** reserves bytes under a lock and **stops gracefully** before the cap |
+| Minimal API payloads via field masks | **Never silently skips** a folder (multi-parent listing has a per-folder fallback) |
+
+Also: Shared Drive support, shortcut resolution + loop detection, metadata fidelity (`modifiedTime`/`description`), exclude filters, dry-run, and a `failed_report.json` for anything that couldn't be copied.
+
+## How a copy works
+
+```mermaid
+flowchart TD
+    S["Source folder"] --> L["List children (paged, or fast-list batch)"]
+    L --> T{"Folder or file?"}
+    T -->|folder| D["Create / find dest folder (tagged via appProperties)"]
+    D --> L
+    T -->|file| DUP{"Already at destination? (appProperties / md5 / name+size)"}
+    DUP -->|yes| SK["Skip (record in resume log)"]
+    DUP -->|no| Q{"Within quota budget? (reserve bytes under lock)"}
+    Q -->|no| ST["Stop gracefully + save resume log"]
+    Q -->|yes| CP["Server-side files.copy (+ metadata + appProperties)"]
+    CP --> V{"Verify created file (id / name / MIME / md5 / size)"}
+    V -->|ok| MK["Mark copied → resume log"]
+    V -->|fail| FR["Record in failed_report.json"]
+```
+
+Transient errors (429, 5xx, rate limits) are retried with **full-jitter exponential backoff** honoring `Retry-After`; fatal errors (permission, missing, storage/daily quota) are **never retried** and are reported.
 
 ## Architecture
 
-The engine is split so the core logic imports **no Google libraries** and is fully unit-testable with a mocked client:
+The engine is split so the **core logic imports no Google libraries** — it depends on a `DriveClientProtocol`, so it's fully unit-testable with a mocked client and **no credentials**. Google specifics live only in `drive_client.py` and `auth.py`.
+
+```mermaid
+flowchart LR
+    CLI["cli.py"] --> CO["copier.py"]
+    NB["Colab notebook"] --> CO
+    CO --> MOD["models.py"]
+    CO --> RT["retry.py"]
+    CO --> RS["resume_store.py"]
+    CO --> PA["pacer.py"]
+    CO -. DriveClientProtocol .-> DC["drive_client.py"]
+    DC --> CC["concurrency.py"]
+    DC --> GA["google-api-python-client"]
+    AU["auth.py"] --> GA
+
+    subgraph Core["Core — no Google imports, unit-tested"]
+        CO
+        MOD
+        RT
+        RS
+        PA
+        CC
+    end
+    subgraph GoogleLayer["Google layer"]
+        DC
+        AU
+    end
+```
 
 | Module | Responsibility |
 |---|---|
-| [`models.py`](src/gdrive_turbo_copy/models.py) | Dataclasses, enums, constants, `DriveClientProtocol` |
+| [`models.py`](src/gdrive_turbo_copy/models.py) | Dataclasses, enums, constants, `DriveClientProtocol`, config validation |
 | [`retry.py`](src/gdrive_turbo_copy/retry.py) | Error classification, full-jitter backoff, `Retry-After`, structured retry events |
+| [`pacer.py`](src/gdrive_turbo_copy/pacer.py) | Token-bucket proactive rate limiter |
 | [`concurrency.py`](src/gdrive_turbo_copy/concurrency.py) | Adaptive, per-operation concurrency control |
 | [`resume_store.py`](src/gdrive_turbo_copy/resume_store.py) | Atomic, integrity-hashed, schema-migrating resume log |
-| [`drive_client.py`](src/gdrive_turbo_copy/drive_client.py) | Real Drive API client (the only place Google libs are imported, besides auth) |
+| [`drive_client.py`](src/gdrive_turbo_copy/drive_client.py) | Real Drive API client (Google libs live here + `auth.py`) |
 | [`auth.py`](src/gdrive_turbo_copy/auth.py) | Colab / ADC / service-account auth (lazy imports, no secrets in code) |
-| [`copier.py`](src/gdrive_turbo_copy/copier.py) | The copy engine + pure duplicate-detection (`DestinationIndex`) |
+| [`copier.py`](src/gdrive_turbo_copy/copier.py) | The copy engine + pure duplicate detection (`DestinationIndex`) |
 | [`cli.py`](src/gdrive_turbo_copy/cli.py) | Command-line interface |
 
 ## Install
@@ -58,13 +137,13 @@ pip install -e ".[dev]"
 ## Colab usage
 
 1. Open the notebook via the **Open In Colab** badge above.
-2. Run the **Install** cell, then the **Input** cell, and fill in:
+2. Run the **Install** cell, then fill the **Input** form:
    - **Drive của bạn (đích)** — destination folder link (in *your* Drive).
    - **Drive nguồn** — source folder link.
-   - Optional: pages, max size (GB), exclude fragments, workers, duplicate-check mode, dry-run.
-3. Run the **Run** cell and authorize Drive access when prompted.
+   - Optional: rate limit, max size (GB), exclude fragments, workers, duplicate-check mode, metadata, fast-list, dry-run.
+3. Run the **Run** cell and authorize Drive access when prompted. Progress streams into a live log panel and a styled result card.
 
-The notebook is a **thin wrapper** that imports this package, so the engine and the CLI share identical behavior.
+The notebook is a **thin wrapper** that imports this package, so the Colab UI and the CLI share identical behavior.
 
 ## CLI usage
 
@@ -79,10 +158,8 @@ gdrive-turbo-copy \
 ```
 
 Outside Colab, authentication uses Application Default Credentials or a service
-account. Pass `--no-colab` and either run `gcloud auth application-default login`
-or set `GDRIVE_SERVICE_ACCOUNT_FILE=/path/key.json`.
-
-Key flags:
+account: pass `--no-colab` and either run `gcloud auth application-default login`
+or set `GDRIVE_SERVICE_ACCOUNT_FILE=/path/key.json`. No secrets are stored in code.
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -101,9 +178,31 @@ Key flags:
 
 ## Resume & idempotency
 
-Progress is saved to `.gdrive_copy_resume.<account>.json` in the destination root. It stores the schema version, account, source/destination root IDs, run ID, copied file IDs, folder map, copied bytes, failed items, `updated_at`, and an **integrity hash** (SHA-256). On load the hash is verified; a corrupted log is rejected rather than silently skipping files. Logs from multiple accounts in the same destination are merged.
+Progress is saved to `.gdrive_copy_resume.<account>.json` in the destination root, holding the schema version, account, source/destination root IDs, run ID, copied file IDs, folder map, copied bytes, failed items, `updated_at`, and a **SHA-256 integrity hash**. On load the hash is verified — a corrupted log is rejected rather than silently skipping files. Logs from multiple accounts in the same destination are merged.
 
-Every copied file carries `appProperties` (`source_file_id`, `source_md5`, `copied_by_tool`) and every created folder carries `source_folder_id` — so re-runs detect and skip already-copied items even if the log is gone. Logs are only cleaned (moved to **trash**, never permanently deleted) when a run finishes fully successfully.
+Independently of the log, every copied file carries `appProperties` (`source_file_id`, `source_md5`, `copied_by_tool`) and every created folder carries `source_folder_id`, so re-runs detect and skip already-copied items **even if the log is deleted**. Logs are only cleaned up (moved to **trash**, never permanently deleted) after a fully successful run.
+
+## Safety & non-goals
+
+- **Verified, not assumed:** each copy is re-fetched and checked before being marked done; Google-native Docs/Sheets/Slides (no md5/size) are verified by id + MIME + name + appProperties.
+- **Stops before the wall:** a byte budget (default 730 GB) reserved under a lock, plus a circuit breaker that bails after sustained rate-limiting — both save progress and tell you when to retry.
+- **Never silently skips:** the optional fast-list path re-lists any folder individually if a batch comes back empty/under-count.
+- **Not copied (by design):** sharing permissions, comments, revision history.
+- **Explicitly out of scope:** multi-account / service-account rotation, `quotaUser` tricks, or any other quota-evasion / ToS-violating mechanism.
+
+## How it compares
+
+| | **GDrive_Turbo_Copy** | rclone | gdrive-copy (Apps Script) |
+|---|---|---|---|
+| Server-side Drive→Drive copy | ✅ | ✅ | ✅ |
+| Zero-setup in Colab | ✅ (notebook) | ⚠️ install/config | ✅ (web app) |
+| Resume after interruption | ✅ integrity-hashed log + appProperties | ✅ | ✅ |
+| Post-copy verification | ✅ per file | ⚠️ via flags | ❌ |
+| Proactive pacing + adaptive concurrency | ✅ | ✅ pacer | ❌ |
+| Embeddable Python package + tests | ✅ | ❌ (Go binary) | ❌ |
+| General multi-cloud / sync | ❌ (Drive→Drive only) | ✅ | ❌ |
+
+Use **rclone** if you need a general multi-backend sync engine. Use this when you want a **purpose-built, resumable, verified, Colab-friendly Drive→Drive folder copier** you can also import as a library.
 
 ## Running tests
 
@@ -115,21 +214,21 @@ pytest -q              # run the suite
 ruff check src tests   # lint
 ```
 
+CI runs the same lint + tests on Python 3.9–3.12.
+
 ## Limitations
 
 - **Not copied:** sharing permissions, comments, revision history (by design).
-- Google enforces a **~750 GB/day** upload+copy quota per account; server-side `files.copy` also has its own (lower) effective ceiling and a per-second rate. The byte guard (default 730 GB) plus the rate-limit circuit breaker stop gracefully on either signal, and the run resumes later.
+- Google enforces a **~750 GB/day** upload+copy quota per account; server-side `files.copy` also has its own (lower) effective ceiling and a per-second rate. The byte guard (default 730 GB) and the rate-limit circuit breaker stop gracefully on either signal, and the run resumes later.
 - Pagination (`from-page`/`to-page`) applies only to the **root** folder's direct children; subfolders are always traversed in full.
-- No quota bypass, multi-account abuse, or limit-evasion is implemented or supported.
+- `createdTime` is sent best-effort; Drive often assigns a fresh creation time on copy.
 
 ### Deferred / future work
 
-These were evaluated against open-source tooling and intentionally left out for now (correctness/effort trade-offs); contributions welcome:
+Intentionally left out for now (correctness/effort trade-offs); contributions welcome:
 
 - **Mid-folder resume cursor**: persist each folder's `pageToken` so a crash inside a huge folder resumes mid-page instead of re-listing it.
 - **Shared-drive `corpora=drive` scoping** and **gzip transport** tuning (efficiency only).
-
-> **Fast-list is now implemented** (`--fast-list`, opt-in): it ORs up to 50 sibling folders into one `files.list` to cut enumeration time on wide trees. It includes the mandatory safety net — if a multi-parent batch returns empty or a parent yields no rows, those folders are re-listed individually, so a folder is **never silently skipped**.
 
 ## Troubleshooting
 
@@ -137,10 +236,11 @@ These were evaluated against open-source tooling and intentionally left out for 
 |---|---|
 | Stops with a "quota" message | Daily copy/upload limit reached. Re-run after ~24h; the resume log continues automatically. |
 | `Destination equals or is inside the source tree` | Choose a destination **outside** the source folder. |
+| `permission to add files to the destination` | The preflight check found the destination unwritable — pick a folder you own/can edit. |
 | Many `cannotAccessShortcutTarget` failures | Shortcuts point to files you can't access; see `failed_report.json`. |
 | Re-running re-copies files | Ensure the destination still contains the prior copies (detected via `appProperties`/checksum) and that the resume log wasn't deleted. |
 | `Resume log integrity hash mismatch` | A log was corrupted; the tool refuses it to avoid skipping files. Trash the bad `.gdrive_copy_resume.*.json` and re-run. |
-| Rate-limit warnings in logs | Normal under load — workers auto-throttle. Lower `--workers` if persistent. |
+| Rate-limit warnings in logs | Normal under load — the pacer + adaptive workers throttle automatically. Lower `--workers` or `--max-tps` if persistent. |
 
 ## License
 
