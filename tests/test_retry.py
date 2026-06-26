@@ -31,6 +31,10 @@ from gdrive_turbo_copy.retry import (
         (404, "notFound", ErrorClass.FATAL_PERMISSION),
         (401, "authError", ErrorClass.FATAL_PERMISSION),
         (400, "badRequest", ErrorClass.FATAL_OTHER),
+        # Copy-specific non-retryable reasons are fatal even with a non-403 status.
+        (400, "cannotCopyFile", ErrorClass.FATAL_PERMISSION),
+        (400, "fileNotExportable", ErrorClass.FATAL_PERMISSION),
+        (403, "cannotCopyFile", ErrorClass.FATAL_PERMISSION),
     ],
 )
 def test_classify(status, reason, expected):

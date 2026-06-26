@@ -49,6 +49,7 @@ class FakeDriveClient:
         self.copy_calls = 0
         self.copy_error_on_call: int | None = None
         self.copy_error: Exception | None = None
+        self.copy_errors_by_call: dict[int, Exception] = {}  # 1-based call number -> error
         self.create_calls = 0
         self.create_error_on_call: int | None = None
         self.create_error: Exception | None = None
@@ -69,13 +70,14 @@ class FakeDriveClient:
         }
         return fid
 
-    def add_file(self, name, parent, *, size=None, md5=None, mime="application/octet-stream", app_properties=None, id=None) -> str:
+    def add_file(self, name, parent, *, size=None, md5=None, mime="application/octet-stream", app_properties=None, id=None, modified=None, created=None, description=None) -> str:
         fid = id or self._new_id("file")
         self.nodes[fid] = {
             "id": fid, "name": name, "mimeType": mime,
             "size": (str(size) if size is not None else None), "md5Checksum": md5,
             "parents": [parent] if parent else [], "appProperties": dict(app_properties or {}),
             "trashed": False,
+            "modifiedTime": modified, "createdTime": created, "description": description,
         }
         return fid
 
@@ -112,8 +114,15 @@ class FakeDriveClient:
             raise make_error(404, "notFound", f"File not found: {file_id}")
         return dict(node)
 
-    def copy_file(self, file_id, body):
+    def copy_file(self, file_id, body, *, ignore_default_visibility=False, keep_revision_forever=False):
         self.copy_calls += 1
+        self.last_copy_body = dict(body)
+        self.last_copy_kwargs = {
+            "ignore_default_visibility": ignore_default_visibility,
+            "keep_revision_forever": keep_revision_forever,
+        }
+        if self.copy_calls in self.copy_errors_by_call:
+            raise self.copy_errors_by_call[self.copy_calls]
         if self.copy_error_on_call is not None and self.copy_calls >= self.copy_error_on_call:
             raise self.copy_error or make_error(403, "dailyLimitExceeded", "Daily quota exceeded")
         src = self.nodes[file_id]
@@ -123,6 +132,10 @@ class FakeDriveClient:
             "size": src.get("size"), "md5Checksum": src.get("md5Checksum"),
             "parents": list(body.get("parents") or []),
             "appProperties": dict(body.get("appProperties") or {}), "trashed": False,
+            # Honor writable metadata supplied in the copy body (Drive applies these).
+            "modifiedTime": body.get("modifiedTime") or src.get("modifiedTime"),
+            "createdTime": body.get("createdTime") or src.get("createdTime"),
+            "description": body.get("description") or src.get("description"),
         }
         return {"id": new_id}
 

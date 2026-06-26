@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "ruff>=0.4"]
+dev = ["pytest>=7.0", "pytest-timeout>=2.1", "ruff>=0.4"]
 
 [project.urls]
 Homepage = "https://github.com/ekaznyra/GDrive_Turbo_Copy"
@@ -38,6 +38,8 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Defensive: a hung test fails instead of blocking CI forever.
+timeout = 60
 
 [tool.ruff]
 line-length = 100

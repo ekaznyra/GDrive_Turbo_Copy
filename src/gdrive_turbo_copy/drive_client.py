@@ -23,11 +23,12 @@ from .logging_utils import get_logger
 from .models import FOLDER_MIME, OperationType
 from .retry import RetryEvent, RetryPolicy, execute_with_retry
 
-_LIST_FIELDS = (
-    "files(id,name,mimeType,size,md5Checksum,shortcutDetails,appProperties,trashed),"
-    "nextPageToken"
+_FILE_SUBFIELDS = (
+    "id,name,mimeType,size,md5Checksum,shortcutDetails,appProperties,trashed,"
+    "modifiedTime,createdTime,description"
 )
-_FILE_FIELDS = "id,name,mimeType,size,md5Checksum,shortcutDetails,appProperties,trashed,parents"
+_LIST_FIELDS = f"files({_FILE_SUBFIELDS}),nextPageToken"
+_FILE_FIELDS = f"{_FILE_SUBFIELDS},parents"
 
 
 def _escape(value: str) -> str:
@@ -41,12 +42,14 @@ class DriveClient:
         *,
         controller: AdaptiveConcurrencyController | None = None,
         retry_policy: RetryPolicy | None = None,
+        pacer: object | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._factory = service_factory
         self._local = threading.local()
         self._controller = controller
         self._policy = retry_policy or RetryPolicy()
+        self._pacer = pacer
         self._logger = logger or get_logger("drive")
 
     # -- internals ----------------------------------------------------------
@@ -74,8 +77,14 @@ class DriveClient:
             ):
                 self._controller.record_throttle(op)
 
+        def call():
+            # Proactive pacing applies to every actual HTTP attempt (incl. retries).
+            if self._pacer is not None:
+                self._pacer.acquire()
+            return build_request().execute()
+
         result = execute_with_retry(
-            lambda: build_request().execute(),
+            call,
             operation=op.value,
             policy=self._policy,
             logger=self._logger,
@@ -123,11 +132,21 @@ class DriveClient:
 
         return self._run(OperationType.METADATA, build)
 
-    def copy_file(self, file_id: str, body: dict):
+    def copy_file(
+        self,
+        file_id: str,
+        body: dict,
+        *,
+        ignore_default_visibility: bool = False,
+        keep_revision_forever: bool = False,
+    ):
         def build():
-            return self._svc().files().copy(
-                fileId=file_id, body=body, fields="id", supportsAllDrives=True
-            )
+            kwargs = dict(fileId=file_id, body=body, fields="id", supportsAllDrives=True)
+            if ignore_default_visibility:
+                kwargs["ignoreDefaultVisibility"] = True
+            if keep_revision_forever:
+                kwargs["keepRevisionForever"] = True
+            return self._svc().files().copy(**kwargs)
 
         return self._run(OperationType.COPY, build)
 

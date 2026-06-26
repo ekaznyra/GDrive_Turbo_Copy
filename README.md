@@ -19,8 +19,14 @@
 - **Idempotency** through `appProperties` (`source_file_id`, `source_md5`, `copied_by_tool`) plus checksum / name+size duplicate detection.
 - **Post-copy verification**: every copy's metadata is fetched and checked (appProperties, name, MIME, and md5/size when available) before it's marked done.
 - **Adaptive concurrency**: workers back off automatically on rate limits and recover after stable success; list / copy / create-folder / log-update operations are throttled separately.
-- **Safe daily-quota guard**: stops *before* the ~750 GB/day server-side copy limit (default budget **730 GB**), preserving progress.
+- **Proactive rate pacing** (token bucket): a steady client-side floor (default ~10 req/s) so most `rateLimitExceeded`/429s never happen — not just reactive backoff.
+- **Metadata fidelity**: preserves `modifiedTime` and `description` on each copy (set in the copy body, no extra round-trip); `createdTime` is sent best-effort (Drive often assigns a fresh creation time on copy).
+- **Rate-limit circuit breaker**: after sustained per-copy throttling, stops gracefully (likely the daily/server-side-copy cap) instead of hammering for 24h.
+- **Safe daily-quota guard**: stops *before* the configured byte budget (default **730 GB**), reserving bytes under a lock so concurrent workers can't overshoot.
+- **Preflight**: fails fast if the destination folder isn't writable, before building a partial tree.
 - **Dry-run** preview and a **`failed_report.json`** for anything that couldn't be copied.
+
+> Inspired by best practices from open-source Drive tooling (rclone's pacer/metadata handling, the gdrive-copy resume pattern, official Drive API guidance). It deliberately does **not** implement multi-account/service-account rotation, `quotaUser` tricks, or any other quota-evasion mechanism.
 
 ## Architecture
 
@@ -82,10 +88,14 @@ Key flags:
 |---|---|---|
 | `--workers` | `4` | Parallel workers (1–16; >8 warns). |
 | `--max-size-gb` | `730` | Stop before copying more than this; `0` = unlimited. |
+| `--max-tps` | `10` | Proactive client-side rate cap (req/s); `0` disables pacing. |
 | `--verify-mode` | `checksum` | `checksum` (strict md5), `name_size`, or `name_only`. |
 | `--exclude` | – | Comma-separated name fragments to skip (`tmp,.log`). |
 | `--from-page` / `--to-page` | `0` | Paginate the **root** folder's direct children (`0` = no limit). |
 | `--allow-name-only` | off | Permit unsafe name-only matching. |
+| `--no-preserve-metadata` | off | Don't copy `modifiedTime`/`createdTime`/`description`. |
+| `--ignore-default-visibility` | off | Bypass a domain default-sharing policy on the copies. |
+| `--keep-revision-forever` | off | Pin the copy's head revision (binary files; uses storage). |
 | `--dry-run` | off | Preview only. |
 
 ## Resume & idempotency
@@ -107,9 +117,17 @@ ruff check src tests   # lint
 ## Limitations
 
 - **Not copied:** sharing permissions, comments, revision history (by design).
-- Google enforces a **~750 GB/day** server-side copy quota per account; this tool stops before the configured budget (default 730 GB) and resumes later.
+- Google enforces a **~750 GB/day** upload+copy quota per account; server-side `files.copy` also has its own (lower) effective ceiling and a per-second rate. The byte guard (default 730 GB) plus the rate-limit circuit breaker stop gracefully on either signal, and the run resumes later.
 - Pagination (`from-page`/`to-page`) applies only to the **root** folder's direct children; subfolders are always traversed in full.
 - No quota bypass, multi-account abuse, or limit-evasion is implemented or supported.
+
+### Deferred / future work
+
+These were evaluated against open-source tooling and intentionally left out for now (correctness/effort trade-offs); contributions welcome:
+
+- **Multi-parent fast-list** (rclone `--fast-list`): batches sibling folders into one `files.list`. Big speedup on wide trees, but requires a careful empty-result fallback (Drive can return zero items for a multi-parent `or` query) to avoid silently skipping folders.
+- **Mid-folder resume cursor**: persist each folder's `pageToken` so a crash inside a huge folder resumes mid-page instead of re-listing it.
+- **Shared-drive `corpora=drive` scoping** and **gzip transport** tuning (efficiency only).
 
 ## Troubleshooting
 

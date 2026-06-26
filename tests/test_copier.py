@@ -73,6 +73,65 @@ def test_destination_inside_source_is_rejected():
     assert result.stop_reason and "inside the source" in result.stop_reason.lower()
 
 
+def test_metadata_preserved_in_copy_body():
+    c = FakeDriveClient()
+    src_root = c.add_folder("SourceRoot")
+    dst_parent = c.add_folder("DestParent")
+    c.add_file(
+        "doc.txt", src_root, size=3, md5="m", mime="text/plain",
+        modified="2020-01-02T03:04:05.000Z", created="2019-01-01T00:00:00.000Z",
+        description="hello world",
+    )
+    result = Copier(c, _cfg(src_root, dst_parent)).run()
+    assert result.copied_count == 1
+    body = c.last_copy_body
+    assert body["modifiedTime"] == "2020-01-02T03:04:05.000Z"
+    assert body["createdTime"] == "2019-01-01T00:00:00.000Z"
+    assert body["description"] == "hello world"
+
+
+def test_metadata_not_sent_when_disabled():
+    c = FakeDriveClient()
+    src_root = c.add_folder("SourceRoot")
+    dst_parent = c.add_folder("DestParent")
+    c.add_file("doc.txt", src_root, size=3, md5="m", mime="text/plain", modified="2020-01-02T03:04:05.000Z")
+    Copier(c, _cfg(src_root, dst_parent, preserve_metadata=False)).run()
+    assert "modifiedTime" not in c.last_copy_body
+
+
+def test_oversized_single_file_is_skipped_and_reported():
+    from gdrive_turbo_copy.models import GIB, MAX_SINGLE_FILE_COPY_GB
+
+    c = FakeDriveClient()
+    src_root = c.add_folder("SourceRoot")
+    dst_parent = c.add_folder("DestParent")
+    big = int((MAX_SINGLE_FILE_COPY_GB + 1) * GIB)
+    c.add_file("huge.bin", src_root, size=big, md5="m")
+    result = Copier(c, _cfg(src_root, dst_parent, max_copy_size_gb=0)).run()
+    assert result.copied_count == 0
+    assert any(fi.reason == "fileTooLargeToCopy" for fi in result.failed_items)
+
+
+def test_copy_flags_passed_through():
+    c = FakeDriveClient()
+    src_root = c.add_folder("SourceRoot")
+    dst_parent = c.add_folder("DestParent")
+    c.add_file("a.txt", src_root, size=3, md5="m", mime="text/plain")
+    Copier(c, _cfg(src_root, dst_parent, ignore_default_visibility=True, keep_revision_forever=True)).run()
+    assert c.last_copy_kwargs == {"ignore_default_visibility": True, "keep_revision_forever": True}
+
+
+def test_preflight_blocks_unwritable_destination():
+    c = FakeDriveClient()
+    src_root = c.add_folder("SourceRoot")
+    dst_parent = c.add_folder("DestParent")
+    c.add_file("a.txt", src_root, size=3, md5="m", mime="text/plain")
+    c.nodes[dst_parent]["capabilities"] = {"canAddChildren": False}
+    result = Copier(c, _cfg(src_root, dst_parent)).run()
+    assert result.copied_count == 0
+    assert result.stop_reason and "permission to add" in result.stop_reason.lower()
+
+
 def test_google_native_file_verified_without_md5():
     c = FakeDriveClient()
     src_root = c.add_folder("SourceRoot")

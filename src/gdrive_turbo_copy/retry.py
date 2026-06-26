@@ -43,6 +43,15 @@ _FATAL_QUOTA_SUBSTRINGS = (
     "the number of children",
 )
 _FATAL_PERMISSION_REASONS = {"insufficientfilepermissions"}
+# Copy-specific non-retryable reasons: the file simply cannot be copied. Named
+# explicitly so they are never retried (even if the status is not 403) and so
+# the failed report reason is precise.
+_FATAL_SKIP_REASONS = {
+    "cannotcopyfile",
+    "filenotexportable",
+    "downloadrestrictedforrevision",
+    "cannotmodifyinheritedteamdrivepermission",
+}
 
 
 def parse_http_error(error: BaseException) -> tuple[str, str, int | None]:
@@ -92,6 +101,8 @@ def classify_error(error: BaseException) -> ErrorClass:
         return ErrorClass.TRANSIENT
     if status in _RETRYABLE_STATUS:
         return ErrorClass.TRANSIENT
+    if reason_l in _FATAL_SKIP_REASONS:
+        return ErrorClass.FATAL_PERMISSION
     if reason_l in _FATAL_PERMISSION_REASONS or status in (401, 403, 404):
         return ErrorClass.FATAL_PERMISSION
     return ErrorClass.FATAL_OTHER

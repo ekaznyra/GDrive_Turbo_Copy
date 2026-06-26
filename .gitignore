@@ -24,3 +24,6 @@ failed_report.json
 .DS_Store
 .idea/
 .vscode/
+
+# stray local test artifact
+pytest_out.txt

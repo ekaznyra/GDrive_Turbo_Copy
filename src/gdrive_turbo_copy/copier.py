@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from .logging_utils import get_logger, log_event
 from .models import (
     GIB,
+    MAX_SINGLE_FILE_COPY_GB,
+    RATE_LIMIT_STOP_THRESHOLD,
     TOOL_TAG,
     WORKER_WARN_THRESHOLD,
     CopyConfig,
@@ -27,6 +29,7 @@ from .models import (
     FailedItem,
     QuotaStopped,
     VerifyMode,
+    validate_app_properties,
 )
 from .resume_store import ResumeState, ResumeStore
 from .retry import classify_error, parse_http_error
@@ -151,6 +154,7 @@ class Copier:
         self._progress_every = 25
         self._copied_session = 0
         self._run_bytes = 0  # bytes reserved/copied this run (drives the size guard)
+        self._consec_rate_fail = 0  # consecutive copy ops that exhausted retries on rate limits
 
     # -- public -------------------------------------------------------------
 
@@ -186,6 +190,13 @@ class Copier:
                 "Choose a destination outside the source."
             )
             log_event(self.log, logging.ERROR, "unsafe_destination", reason=self._result.stop_reason)
+            return self._result
+
+        # Preflight: fail fast if the destination parent is not writable.
+        preflight_error = self._preflight(dest_parent_id)
+        if preflight_error:
+            self._result.stop_reason = preflight_error
+            log_event(self.log, logging.ERROR, "preflight_failed", reason=preflight_error)
             return self._result
 
         try:
@@ -242,6 +253,35 @@ class Copier:
                 self._save_log(force=True)
 
         return self._finalize(dest_root_id, completed)
+
+    def request_stop(self, reason: str | None = None) -> None:
+        """Signal the run to stop ASAP (e.g. from a SIGINT/SIGTERM handler).
+
+        The traversal breaks at the next check and ``run()``'s finally block
+        force-saves the resume log, so no copied-but-unlogged work is lost.
+        """
+        if not self._result.stop_reason:
+            self._result.stop_reason = reason or "Stop requested; progress saved to the resume log."
+        self._stop.set()
+
+    def _preflight(self, dest_parent_id: str) -> str | None:
+        """Return an error string if the destination parent is clearly unusable.
+
+        Best-effort: if capabilities aren't returned we don't block (some
+        backends/fakes omit them); we only fail on an explicit negative.
+        """
+        try:
+            meta = self.client.get_metadata(
+                dest_parent_id, fields="id,mimeType,trashed,capabilities(canAddChildren)"
+            )
+        except Exception as exc:  # noqa: BLE001
+            return f"Cannot access destination folder: {exc}"
+        if meta.get("trashed"):
+            return "Destination folder is in the trash."
+        caps = meta.get("capabilities")
+        if isinstance(caps, dict) and caps.get("canAddChildren") is False:
+            return "You do not have permission to add files to the destination folder."
+        return None
 
     # -- recursion ----------------------------------------------------------
 
@@ -408,6 +448,18 @@ class Copier:
             return
 
         size = src.size or 0
+
+        # A single file larger than the daily copy cap can never be copied by
+        # the API — skip and report it instead of issuing a doomed call.
+        if size and size > MAX_SINGLE_FILE_COPY_GB * GIB:
+            self._record_failed(
+                src, reason="fileTooLargeToCopy",
+                message=f"File is {size / GIB:.1f} GB, exceeds the ~{MAX_SINGLE_FILE_COPY_GB:.0f} GB single-file copy limit.",
+                parent_source_id=parent_source_id, source_shortcut_id=shortcut_id,
+                effective_source_id=eff_id,
+            )
+            return
+
         if self.config.dry_run:
             with self._lock:
                 self._result.would_copy_count += 1
@@ -427,7 +479,7 @@ class Copier:
                 raise QuotaStopped(self._result.stop_reason)
             self._run_bytes += size  # reserve
 
-        # 4) Server-side copy with idempotency appProperties.
+        # 4) Server-side copy with idempotency appProperties + metadata fidelity.
         app_props = {
             "source_file_id": src.id,
             "source_md5": src.md5 or "",
@@ -435,9 +487,25 @@ class Copier:
         }
         if shortcut_id:
             app_props["source_shortcut_id"] = shortcut_id
-        body = {"name": src.name, "parents": [dest_parent_id], "appProperties": app_props}
+        validate_app_properties(app_props)
+        body: dict = {"name": src.name, "parents": [dest_parent_id], "appProperties": app_props}
+        if self.config.preserve_metadata:
+            # modifiedTime and description are writable on copy and reliably
+            # preserved with no extra round-trip. createdTime is best-effort:
+            # Drive usually assigns a fresh creation time on copy and ignores
+            # this field (no error), so we send it but don't promise fidelity.
+            if src.modified_time:
+                body["modifiedTime"] = src.modified_time
+            if src.created_time:
+                body["createdTime"] = src.created_time
+            if src.description:
+                body["description"] = src.description
         try:
-            created = self.client.copy_file(src.id, body)
+            created = self.client.copy_file(
+                src.id, body,
+                ignore_default_visibility=self.config.ignore_default_visibility,
+                keep_revision_forever=self.config.keep_revision_forever,
+            )
         except QuotaStopped:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -449,6 +517,8 @@ class Copier:
         ok, detail = self._verify_copy(new_id, src, shortcut_id)
         if not ok:
             self._release_reservation(size)
+            with self._lock:
+                self._consec_rate_fail = 0  # a non-rate-limit outcome breaks the streak
             self._record_failed(
                 src, reason="verificationFailed", message=detail,
                 parent_source_id=parent_source_id, source_shortcut_id=shortcut_id,
@@ -478,7 +548,37 @@ class Copier:
 
     def _handle_copy_exception(self, exc, src, parent_source_id, shortcut_id, eff_id) -> None:
         self._raise_if_fatal_quota(exc, f"copying '{src.name}'")
-        reason, message, _ = parse_http_error(exc)
+        reason, message, status = parse_http_error(exc)
+        # Circuit breaker: a copy that exhausted all retries on rate limiting is a
+        # strong signal of the daily/server-side-copy cap. After enough of these
+        # *consecutive* failures, stop gracefully rather than hammering for 24h.
+        # Any non-rate-limit copy failure breaks the streak (see also the reset
+        # on success in _mark_copied and on verification failure in _copy_file).
+        is_rate = status == 429 or (reason or "").lower() in (
+            "ratelimitexceeded",
+            "userratelimitexceeded",
+        )
+        if is_rate:
+            with self._lock:
+                self._consec_rate_fail += 1
+                tripped = self._consec_rate_fail >= RATE_LIMIT_STOP_THRESHOLD
+            if tripped:
+                self._result.stop_reason = (
+                    f"{RATE_LIMIT_STOP_THRESHOLD} consecutive copy operations were rate-limited "
+                    f"(reason={reason or 'rateLimitExceeded'}); likely the daily/server-side-copy "
+                    f"cap. Stopping gracefully — re-run after the quota resets (~24h); the resume "
+                    f"log preserves progress."
+                )
+                self._stop.set()
+                if self._state.dest_root_id and not self.config.dry_run:
+                    try:
+                        self._save_log(force=True)
+                    except Exception:  # pragma: no cover
+                        pass
+                raise QuotaStopped(self._result.stop_reason)
+        else:
+            with self._lock:
+                self._consec_rate_fail = 0
         self._record_failed(
             src, reason=reason or "copyFailed", message=message or str(exc),
             parent_source_id=parent_source_id,
@@ -549,6 +649,7 @@ class Copier:
                 app_props["shortcut_target_id"] = source_folder_id
         elif source_folder_id:
             app_props["source_folder_id"] = source_folder_id
+        validate_app_properties(app_props)
         try:
             created = self.client.create_folder(name, dest_parent_id, app_properties=app_props)
         except QuotaStopped:
@@ -714,6 +815,7 @@ class Copier:
             self._result.copied_bytes += size
             self._dirty += 1
             self._copied_session += 1
+            self._consec_rate_fail = 0  # a success breaks the rate-limit streak
             session = self._copied_session
         if session % self._progress_every == 0:
             log_event(

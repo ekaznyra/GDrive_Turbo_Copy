@@ -23,13 +23,41 @@ GIB = 1024**3
 DEFAULT_WORKERS = 4
 MAX_WORKERS = 16
 WORKER_WARN_THRESHOLD = 8
-# Slightly below Google's documented ~750 GB/day server-side copy quota to
-# leave headroom and stop *before* hitting the hard limit.
+# Slightly below Google's documented ~750 GB/day upload+copy quota to leave
+# headroom and stop *before* hitting the hard limit. NOTE: server-side copy has
+# its own (lower) effective ceiling and a per-second rate limit; the rate-limit
+# circuit breaker handles the latter, and the run always stops gracefully on
+# Google's own quota signal regardless of this byte budget. 0 = unlimited.
 DEFAULT_MAX_COPY_SIZE_GB = 730.0
+# Drive rejects copying a single file larger than the daily copy cap (~750 GB).
+MAX_SINGLE_FILE_COPY_GB = 750.0
+# Proactive client-side pacing: Drive's sustained write ceiling is low
+# (~10 ops/sec/project). A token bucket below this avoids most 429s entirely.
+DEFAULT_MAX_TPS = 10.0
+# Stop gracefully after this many consecutive copy ops exhaust retries on rate
+# limiting (a strong signal the daily/server-side-copy cap is hit; retrying for
+# 24h is futile).
+RATE_LIMIT_STOP_THRESHOLD = 8
+# appProperties: each entry's key+value must be <= 124 bytes (UTF-8); <=30
+# private entries per file (Drive limits).
+APPPROP_MAX_ENTRY_BYTES = 124
+APPPROP_MAX_ENTRIES = 30
 
 
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def validate_app_properties(props: dict[str, str]) -> None:
+    """Raise ValueError if appProperties would violate Drive's documented limits."""
+    if len(props) > APPPROP_MAX_ENTRIES:
+        raise ValueError(f"appProperties has {len(props)} entries (>{APPPROP_MAX_ENTRIES}).")
+    for key, value in props.items():
+        size = len(str(key).encode("utf-8")) + len(str(value).encode("utf-8"))
+        if size > APPPROP_MAX_ENTRY_BYTES:
+            raise ValueError(
+                f"appProperties entry {key!r} is {size} bytes (>{APPPROP_MAX_ENTRY_BYTES})."
+            )
 
 
 # --- Enums -------------------------------------------------------------------
@@ -80,6 +108,9 @@ class DriveFile:
     shortcut_target_id: str | None = None
     app_properties: dict[str, str] = field(default_factory=dict)
     trashed: bool = False
+    modified_time: str | None = None
+    created_time: str | None = None
+    description: str | None = None
 
     @property
     def is_folder(self) -> bool:
@@ -114,6 +145,9 @@ class DriveFile:
             shortcut_target_id=shortcut.get("targetId"),
             app_properties=dict(data.get("appProperties") or {}),
             trashed=bool(data.get("trashed", False)),
+            modified_time=data.get("modifiedTime"),
+            created_time=data.get("createdTime"),
+            description=data.get("description"),
         )
 
 
@@ -132,6 +166,10 @@ class CopyConfig:
     from_page: int = 0
     to_page: int = 0
     allow_name_only: bool = False
+    max_tps: float = DEFAULT_MAX_TPS  # proactive client-side rate cap (0 = off)
+    preserve_metadata: bool = True  # copy modifiedTime/createdTime/description
+    ignore_default_visibility: bool = False  # opt-in: bypass domain default sharing
+    keep_revision_forever: bool = False  # opt-in: pin the copy's head revision
 
     def validate(self) -> list[str]:
         from .urls import extract_folder_id
@@ -149,6 +187,8 @@ class CopyConfig:
             errors.append(f"workers must be between 1 and {MAX_WORKERS} (got {self.workers}).")
         if self.max_copy_size_gb < 0:
             errors.append(f"max_copy_size_gb must be >= 0 (got {self.max_copy_size_gb}).")
+        if self.max_tps < 0:
+            errors.append(f"max_tps must be >= 0 (got {self.max_tps}).")
         if self.from_page < 0:
             errors.append(f"from_page must be >= 0 (got {self.from_page}).")
         if self.to_page < 0:
@@ -249,7 +289,14 @@ class DriveClientProtocol(Protocol):
 
     def get_metadata(self, file_id: str, *, fields: str | None = None) -> dict: ...
 
-    def copy_file(self, file_id: str, body: dict) -> dict: ...
+    def copy_file(
+        self,
+        file_id: str,
+        body: dict,
+        *,
+        ignore_default_visibility: bool = False,
+        keep_revision_forever: bool = False,
+    ) -> dict: ...
 
     def create_folder(
         self, name: str, parent_id: str, *, app_properties: dict | None = None

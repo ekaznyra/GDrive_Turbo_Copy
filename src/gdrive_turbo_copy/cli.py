@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from .logging_utils import setup_logging
 from .models import (
     DEFAULT_MAX_COPY_SIZE_GB,
+    DEFAULT_MAX_TPS,
     DEFAULT_WORKERS,
     GIB,
     CopyConfig,
@@ -53,6 +54,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dry-run", action="store_true", help="Preview only; create/copy nothing.")
     parser.add_argument(
+        "--max-tps", type=float, default=DEFAULT_MAX_TPS,
+        help=f"Proactive client-side rate cap, requests/sec (default {DEFAULT_MAX_TPS:g}; 0 = off).",
+    )
+    parser.add_argument(
+        "--no-preserve-metadata", action="store_true",
+        help="Do not preserve modifiedTime/createdTime/description on copies.",
+    )
+    parser.add_argument(
+        "--ignore-default-visibility", action="store_true",
+        help="Bypass any domain default-sharing policy on the new copies.",
+    )
+    parser.add_argument(
+        "--keep-revision-forever", action="store_true",
+        help="Pin the copy's head revision against auto-pruning (binary files; uses storage).",
+    )
+    parser.add_argument(
         "--no-colab", action="store_true",
         help="Skip Colab auth; use ADC / service-account credentials.",
     )
@@ -74,6 +91,10 @@ def config_from_args(args: argparse.Namespace) -> CopyConfig:
         from_page=args.from_page,
         to_page=args.to_page,
         allow_name_only=args.allow_name_only,
+        max_tps=args.max_tps,
+        preserve_metadata=not args.no_preserve_metadata,
+        ignore_default_visibility=args.ignore_default_visibility,
+        keep_revision_forever=args.keep_revision_forever,
     )
 
 
@@ -113,10 +134,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     # Heavy/Google imports happen here so --help and validation stay dependency-free.
+    import signal
+
     from .auth import make_service_factory
     from .concurrency import AdaptiveConcurrencyController
     from .copier import Copier
     from .drive_client import DriveClient
+    from .pacer import make_pacer
 
     try:
         factory = make_service_factory(prefer_colab=not args.no_colab)
@@ -125,8 +149,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 3
 
     controller = AdaptiveConcurrencyController(copy_workers=max(1, min(args.workers, 16)))
-    client = DriveClient(factory, controller=controller, logger=logger)
-    result = Copier(client, config, logger=logger).run()
+    pacer = make_pacer(config.max_tps)
+    client = DriveClient(factory, controller=controller, pacer=pacer, logger=logger)
+    copier = Copier(client, config, logger=logger)
+
+    # Flush progress and stop gracefully on Ctrl-C / SIGTERM instead of dying
+    # mid-write and losing un-logged progress.
+    def _on_signal(signum, _frame):
+        logger.warning("received signal %s; stopping gracefully and saving progress...", signum)
+        copier.request_stop(f"Interrupted by signal {signum}; progress saved to the resume log.")
+
+    for _sig in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
+        if _sig is not None:
+            try:
+                signal.signal(_sig, _on_signal)
+            except (ValueError, OSError):  # not in main thread / unsupported
+                pass
+
+    result = copier.run()
     _print_summary(result)
 
     if result.stop_reason and result.copied_count == 0 and not result.dry_run:
