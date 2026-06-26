@@ -1,84 +1,127 @@
-# GDrive_Turbo_Copy
+# ⚡ GDrive_Turbo_Copy
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ekaznyra/GDrive_Turbo_Copy/blob/main/GDrive_Turbo_Copy.ipynb)
+[![CI](https://github.com/ekaznyra/GDrive_Turbo_Copy/actions/workflows/ci.yml/badge.svg)](https://github.com/ekaznyra/GDrive_Turbo_Copy/actions/workflows/ci.yml)
 
-Sao chép thư mục Google Drive siêu tốc, hỗ trợ đa luồng và tiếp tục (resume) khi bị ngắt.
+> Sao chép thư mục Google Drive **siêu tốc** (server-side), hỗ trợ **đa luồng**, **resume** khi bị ngắt, kiểm tra trùng và **xác minh sau khi copy**.
+> Fast, **server-side** Google Drive folder-to-folder copier with multi-threading, resume, duplicate detection and post-copy verification.
 
-## Mục đích
+**⚠️ Legal / pháp lý:** Chỉ sao chép dữ liệu bạn **có quyền hợp pháp** truy cập. Công cụ **không** sao chép *permissions, comments, revision history*. Không có cơ chế vượt quota hay lạm dụng nhiều tài khoản.
 
-Công cụ này giúp sao chép toàn bộ nội dung một thư mục Google Drive (bao gồm cả Shared Drives) sang một thư mục Google Drive khác, sử dụng Drive API server-side copy (không tốn băng thông tải xuống).
+---
 
-## Giới hạn quan trọng
+## What it does
 
-- **Không copy permissions**: quyền chia sẻ của file/folder nguồn KHÔNG được sao chép.
-- **Không copy comments**: bình luận trên file nguồn KHÔNG được sao chép.
-- **Không copy revision history**: lịch sử chỉnh sửa KHÔNG được sao chép.
-- **Giới hạn quota**: Google Drive giới hạn ~750 GB server-side copy mỗi ngày. Khi đạt giới hạn, công cụ sẽ dừng và lưu tiến độ để chạy lại sau.
-- **Chỉ dùng hợp pháp**: chỉ sử dụng để sao chép dữ liệu bạn có quyền hợp pháp.
+- **Server-side copy** via the Drive API (`files.copy`) — Google copies on its servers, so **no download/upload bandwidth** is consumed.
+- **Shared Drive support** (`supportsAllDrives` / `includeItemsFromAllDrives`).
+- **Recursive folder tree** rebuild (folders can't be "copied" by the API, so the tree is recreated and files copied into it).
+- **Resume after interruption** via a schema-versioned, integrity-hashed JSON log stored in the destination.
+- **Idempotency** through `appProperties` (`source_file_id`, `source_md5`, `copied_by_tool`) plus checksum / name+size duplicate detection.
+- **Post-copy verification**: every copy's metadata is fetched and checked (appProperties, name, MIME, and md5/size when available) before it's marked done.
+- **Adaptive concurrency**: workers back off automatically on rate limits and recover after stable success; list / copy / create-folder / log-update operations are throttled separately.
+- **Safe daily-quota guard**: stops *before* the ~750 GB/day server-side copy limit (default budget **730 GB**), preserving progress.
+- **Dry-run** preview and a **`failed_report.json`** for anything that couldn't be copied.
 
-## Cách sử dụng
+## Architecture
 
-1. Mở notebook trong Google Colab bằng nút badge ở trên.
-2. Chạy ô **Input**: điền link thư mục đích và thư mục nguồn.
-3. Chạy ô **Run**: quá trình copy bắt đầu.
+The engine is split so the core logic imports **no Google libraries** and is fully unit-testable with a mocked client:
 
-### Các tham số
+| Module | Responsibility |
+|---|---|
+| [`models.py`](src/gdrive_turbo_copy/models.py) | Dataclasses, enums, constants, `DriveClientProtocol` |
+| [`retry.py`](src/gdrive_turbo_copy/retry.py) | Error classification, full-jitter backoff, `Retry-After`, structured retry events |
+| [`concurrency.py`](src/gdrive_turbo_copy/concurrency.py) | Adaptive, per-operation concurrency control |
+| [`resume_store.py`](src/gdrive_turbo_copy/resume_store.py) | Atomic, integrity-hashed, schema-migrating resume log |
+| [`drive_client.py`](src/gdrive_turbo_copy/drive_client.py) | Real Drive API client (the only place Google libs are imported, besides auth) |
+| [`auth.py`](src/gdrive_turbo_copy/auth.py) | Colab / ADC / service-account auth (lazy imports, no secrets in code) |
+| [`copier.py`](src/gdrive_turbo_copy/copier.py) | The copy engine + pure duplicate-detection (`DestinationIndex`) |
+| [`cli.py`](src/gdrive_turbo_copy/cli.py) | Command-line interface |
 
-| Tham số | Mô tả | Mặc định |
+## Install
+
+```bash
+# From the repo
+pip install "git+https://github.com/ekaznyra/GDrive_Turbo_Copy.git"
+
+# For development (editable + tests + linter)
+git clone https://github.com/ekaznyra/GDrive_Turbo_Copy.git
+cd GDrive_Turbo_Copy
+pip install -e ".[dev]"
+```
+
+## Colab usage
+
+1. Open the notebook via the **Open In Colab** badge above.
+2. Run the **Install** cell, then the **Input** cell, and fill in:
+   - **Drive của bạn (đích)** — destination folder link (in *your* Drive).
+   - **Drive nguồn** — source folder link.
+   - Optional: pages, max size (GB), exclude fragments, workers, duplicate-check mode, dry-run.
+3. Run the **Run** cell and authorize Drive access when prompted.
+
+The notebook is a **thin wrapper** that imports this package, so the engine and the CLI share identical behavior.
+
+## CLI usage
+
+```bash
+gdrive-turbo-copy \
+  --source "https://drive.google.com/drive/folders/SOURCE_ID" \
+  --dest   "https://drive.google.com/drive/folders/DEST_ID" \
+  --workers 4 \
+  --verify-mode checksum \
+  --max-size-gb 730 \
+  --dry-run
+```
+
+Outside Colab, authentication uses Application Default Credentials or a service
+account. Pass `--no-colab` and either run `gcloud auth application-default login`
+or set `GDRIVE_SERVICE_ACCOUNT_FILE=/path/key.json`.
+
+Key flags:
+
+| Flag | Default | Meaning |
 |---|---|---|
-| Drive của bạn (đích) | Link thư mục Google Drive nhận file | Bắt buộc |
-| Drive nguồn (shared) | Link thư mục Google Drive nguồn | Bắt buộc |
-| Từ trang / Đến trang | Phân trang theo từng thư mục (mỗi trang ~1000 mục). 0 = không giới hạn | 0 |
-| Dung lượng tối đa (GB) | Dừng khi đã copy đủ dung lượng này | 750 |
-| Bỏ file/folder chứa chữ | Danh sách chuỗi cần bỏ qua, phân tách bằng dấu phẩy | Trống |
-| Số luồng song song | Số file copy đồng thời (1 = tuần tự, tối đa 16) | 4 |
-| Kiểm tra trùng | Cách kiểm tra file đã tồn tại ở đích | Tên + dung lượng |
-| Dry-run | Chỉ xem trước, không thực sự copy | Tắt |
+| `--workers` | `4` | Parallel workers (1–16; >8 warns). |
+| `--max-size-gb` | `730` | Stop before copying more than this; `0` = unlimited. |
+| `--verify-mode` | `checksum` | `checksum` (strict md5), `name_size`, or `name_only`. |
+| `--exclude` | – | Comma-separated name fragments to skip (`tmp,.log`). |
+| `--from-page` / `--to-page` | `0` | Paginate the **root** folder's direct children (`0` = no limit). |
+| `--allow-name-only` | off | Permit unsafe name-only matching. |
+| `--dry-run` | off | Preview only. |
 
-### Chế độ kiểm tra trùng
+## Resume & idempotency
 
-- **Tên + dung lượng** (khuyên dùng): bỏ qua file nếu tên và kích thước khớp.
-- **Chỉ tên**: bỏ qua file nếu tên khớp và `appProperties` xác nhận (tránh bỏ qua nhầm file trùng tên).
-- **Checksum**: so sánh MD5, fallback về dung lượng nếu không có MD5.
+Progress is saved to `.gdrive_copy_resume.<account>.json` in the destination root. It stores the schema version, account, source/destination root IDs, run ID, copied file IDs, folder map, copied bytes, failed items, `updated_at`, and an **integrity hash** (SHA-256). On load the hash is verified; a corrupted log is rejected rather than silently skipping files. Logs from multiple accounts in the same destination are merged.
 
-## Cơ chế Resume
+Every copied file carries `appProperties` (`source_file_id`, `source_md5`, `copied_by_tool`) and every created folder carries `source_folder_id` — so re-runs detect and skip already-copied items even if the log is gone. Logs are only cleaned (moved to **trash**, never permanently deleted) when a run finishes fully successfully.
 
-Sau mỗi 50 file được copy, công cụ lưu một file log JSON vào thư mục đích:
+## Running tests
 
+Tests mock all Drive calls — **no real credentials are needed**.
+
+```bash
+pip install -e ".[dev]"
+pytest -q              # run the suite
+ruff check src tests   # lint
 ```
-.gdrive_copy_resume.<email>.json
-```
 
-File log lưu:
-- Danh sách ID file đã copy (`copied_file_ids`)
-- Mapping thư mục nguồn → thư mục đích (`folder_map`)
-- Tổng dung lượng đã copy của tài khoản này (`lifetime_size_mb`)
-- Danh sách file thất bại (`failed_items`)
+## Limitations
 
-Khi chạy lại, công cụ đọc tất cả log trong thư mục đích, bỏ qua file đã copy, và tiếp tục từ chỗ dừng.
+- **Not copied:** sharing permissions, comments, revision history (by design).
+- Google enforces a **~750 GB/day** server-side copy quota per account; this tool stops before the configured budget (default 730 GB) and resumes later.
+- Pagination (`from-page`/`to-page`) applies only to the **root** folder's direct children; subfolders are always traversed in full.
+- No quota bypass, multi-account abuse, or limit-evasion is implemented or supported.
 
-Nếu không có file nào thất bại và copy hoàn tất 100%, file log sẽ được xóa tự động.
+## Troubleshooting
 
-## appProperties (idempotency)
+| Symptom | Cause / fix |
+|---|---|
+| Stops with a "quota" message | Daily copy/upload limit reached. Re-run after ~24h; the resume log continues automatically. |
+| `Destination equals or is inside the source tree` | Choose a destination **outside** the source folder. |
+| Many `cannotAccessShortcutTarget` failures | Shortcuts point to files you can't access; see `failed_report.json`. |
+| Re-running re-copies files | Ensure the destination still contains the prior copies (detected via `appProperties`/checksum) and that the resume log wasn't deleted. |
+| `Resume log integrity hash mismatch` | A log was corrupted; the tool refuses it to avoid skipping files. Trash the bad `.gdrive_copy_resume.*.json` and re-run. |
+| Rate-limit warnings in logs | Normal under load — workers auto-throttle. Lower `--workers` if persistent. |
 
-Mỗi file được copy sẽ có `appProperties`:
-- `source_file_id`: ID file nguồn
-- `source_md5`: MD5 checksum file nguồn (nếu có)
-- `copied_by_tool`: `GDrive_Turbo_Copy`
+## License
 
-Mỗi thư mục được tạo sẽ có `appProperties`:
-- `source_folder_id`: ID thư mục nguồn
-- `copied_by_tool`: `GDrive_Turbo_Copy`
-
-`appProperties` được kiểm tra trước khi so sánh tên/dung lượng, giúp tránh bỏ qua nhầm file không liên quan có cùng tên.
-
-## Xử lý lỗi
-
-- **Rate limit / lỗi tạm thời**: tự động retry với exponential backoff (tối đa 6 lần, chờ tối đa 32s).
-- **Quota fatal** (storageQuotaExceeded, dailyLimitExceeded, v.v.): dừng ngay, lưu log.
-- **Permission error / 404**: bỏ qua file đó, không retry.
-- **File thất bại**: ghi vào log và xuất báo cáo JSON (`gdrive_copy_failed_YYYYMMDD_HHMMSS.json`) vào thư mục đích.
-
-## Tests
-
-Chạy ô **Tests** để kiểm tra các chức năng core mà không cần kết nối Drive thực.
+[MIT](LICENSE)
