@@ -57,6 +57,7 @@ class FakeDriveClient:
         self.multi_returns_empty = False  # simulate Drive's flaky empty multi-parent OR
         self.multi_calls = 0
         self.list_children_calls: list[str] = []  # folder ids passed to list_children
+        self.get_metadata_calls: list[str] = []  # file ids passed to get_metadata
 
     # -- builders (test helpers) -------------------------------------------
 
@@ -131,6 +132,7 @@ class FakeDriveClient:
         return out, None
 
     def get_metadata(self, file_id, *, fields=None):
+        self.get_metadata_calls.append(file_id)
         if file_id == "root":
             return {"id": "root"}
         node = self.nodes.get(file_id)
@@ -163,7 +165,9 @@ class FakeDriveClient:
             "createdTime": body.get("createdTime") or src.get("createdTime"),
             "description": body.get("description") or src.get("description"),
         }
-        return {"id": new_id}
+        # Real Drive returns the created File resource (projected to the copy
+        # call's `fields`); the copier verifies straight from it.
+        return dict(self.nodes[new_id])
 
     def create_folder(self, name, parent_id, *, app_properties=None):
         self.create_calls += 1

@@ -46,6 +46,36 @@ def test_completed_subtree_is_skipped_on_resume():
     assert second.completed and not second.has_failures
 
 
+def test_fast_list_composes_with_skip_completed():
+    # --fast-list previously ignored --skip-completed-folders (tree nodes were
+    # never recorded on the fast path), silently disabling the optimization.
+    c, src_root, dst_parent, sub_ok, sub_bad, d_id = _tree_with_two_subfolders()
+
+    # Run 1 (fast-list): d.txt fails, so subOK completes but subBAD does not.
+    c.copy_fail_ids = {d_id}
+    first = Copier(c, _cfg(src_root, dst_parent, fast_list=True, skip_completed_folders=True)).run()
+    assert first.copied_count == 2  # a.txt + c.txt
+    assert any(fi.reason == "insufficientFilePermissions" for fi in first.failed_items)
+
+    # The completed subtree must be persisted just like the default path.
+    from gdrive_turbo_copy.resume_store import deserialize
+
+    logs = [n for n in c.nodes.values() if str(n.get("name", "")).startswith(".gdrive_copy_resume")]
+    assert logs
+    state = deserialize(logs[0]["_content"])
+    assert sub_ok in state.completed_folders
+    assert sub_bad not in state.completed_folders
+
+    # Run 2 (fast-list): subOK is skipped, only d.txt is copied.
+    c.copy_fail_ids = set()
+    c.list_children_calls = []
+    second = Copier(c, _cfg(src_root, dst_parent, fast_list=True, skip_completed_folders=True)).run()
+    assert sub_ok not in c.list_children_calls  # completed subtree never re-listed
+    assert second.skipped_complete_folders == 1
+    assert second.copied_count == 1  # only d.txt this run
+    assert second.completed and not second.has_failures
+
+
 def test_completed_skip_off_relists_everything():
     c, src_root, dst_parent, sub_ok, sub_bad, d_id = _tree_with_two_subfolders()
     c.copy_fail_ids = {d_id}

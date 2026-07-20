@@ -76,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-completed-folders", action="store_true",
         help="On resume, skip re-listing subtrees copied in full last run (faster; "
-             "won't pick up newly-added files in those subtrees; default-path only).",
+             "won't pick up newly-added files in those subtrees; composes with --fast-list).",
     )
     parser.add_argument(
         "--no-colab", action="store_true",

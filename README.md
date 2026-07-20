@@ -184,7 +184,7 @@ Progress is saved to `.gdrive_copy_resume.<account>.json` in the destination roo
 
 Independently of the log, every copied file carries `appProperties` (`source_file_id`, `source_md5`, `copied_by_tool`) and every created folder carries `source_folder_id`, so re-runs detect and skip already-copied items **even if the log is deleted**. Logs are only cleaned up (moved to **trash**, never permanently deleted) after a fully successful run.
 
-**Fast resume (opt-in):** with `--skip-completed-folders`, the resume log also records which source subtrees were copied **in full** (clean listing, every descendant verified-copied, no failures). On the next run those subtrees are skipped without re-listing — a big time saver on deep trees. The trade-off: a skipped subtree won't pick up files *newly added* to the source since the last run, so leave it off if you re-run to sync new content. It applies to the default traversal (not `--fast-list`).
+**Fast resume (opt-in):** with `--skip-completed-folders`, the resume log also records which source subtrees were copied **in full** (clean listing, every descendant verified-copied, no failures). On the next run those subtrees are skipped without re-listing — a big time saver on deep trees. The trade-off: a skipped subtree won't pick up files *newly added* to the source since the last run, so leave it off if you re-run to sync new content. It works with both the default traversal and `--fast-list`.
 
 ## Safety & non-goals
 
