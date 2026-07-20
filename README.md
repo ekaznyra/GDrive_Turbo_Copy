@@ -141,7 +141,7 @@ pip install -e ".[dev]"
 2. Run the **Install** cell, then fill the **Input** form:
    - **Drive của bạn (đích)** — destination folder link (in *your* Drive).
    - **Drive nguồn** — source folder link.
-   - Optional: rate limit, max size (GB), exclude fragments, workers, duplicate-check mode, metadata, fast-list, dry-run.
+   - Optional: rate limit, max size (GB), exclude fragments, workers, duplicate-check mode, metadata, fast-list, skip-completed-folders, dry-run.
 3. Run the **Run** cell and authorize Drive access when prompted. Progress streams into a live log panel and a styled result card.
 
 The notebook is a **thin wrapper** that imports this package, so the Colab UI and the CLI share identical behavior.
@@ -175,6 +175,7 @@ or set `GDRIVE_SERVICE_ACCOUNT_FILE=/path/key.json`. No secrets are stored in co
 | `--ignore-default-visibility` | off | Bypass a domain default-sharing policy on the copies. |
 | `--keep-revision-forever` | off | Pin the copy's head revision (binary files; uses storage). |
 | `--fast-list` | off | Batch sibling folders into one list call — faster on wide trees (opt-in). |
+| `--skip-completed-folders` | off | On resume, skip re-listing subtrees copied in full last run (faster resume; won't pick up newly-added files in those subtrees; default-path only). |
 | `--dry-run` | off | Preview only. |
 
 ## Resume & idempotency
@@ -182,6 +183,8 @@ or set `GDRIVE_SERVICE_ACCOUNT_FILE=/path/key.json`. No secrets are stored in co
 Progress is saved to `.gdrive_copy_resume.<account>.json` in the destination root, holding the schema version, account, source/destination root IDs, run ID, copied file IDs, folder map, copied bytes, failed items, `updated_at`, and a **SHA-256 integrity hash**. On load the hash is verified — a corrupted log is rejected rather than silently skipping files. Logs from multiple accounts in the same destination are merged.
 
 Independently of the log, every copied file carries `appProperties` (`source_file_id`, `source_md5`, `copied_by_tool`) and every created folder carries `source_folder_id`, so re-runs detect and skip already-copied items **even if the log is deleted**. Logs are only cleaned up (moved to **trash**, never permanently deleted) after a fully successful run.
+
+**Fast resume (opt-in):** with `--skip-completed-folders`, the resume log also records which source subtrees were copied **in full** (clean listing, every descendant verified-copied, no failures). On the next run those subtrees are skipped without re-listing — a big time saver on deep trees. The trade-off: a skipped subtree won't pick up files *newly added* to the source since the last run, so leave it off if you re-run to sync new content. It applies to the default traversal (not `--fast-list`).
 
 ## Safety & non-goals
 
@@ -228,7 +231,7 @@ CI runs the same lint + tests on Python 3.9–3.12.
 
 Intentionally left out for now (correctness/effort trade-offs); contributions welcome:
 
-- **Mid-folder resume cursor**: persist each folder's `pageToken` so a crash inside a huge folder resumes mid-page instead of re-listing it.
+- **Mid-page resume cursor**: persist each folder's `pageToken` so a crash inside a single huge folder resumes mid-page instead of re-listing that folder. (Subtree-level fast resume already exists via `--skip-completed-folders`, which skips whole folders copied in full last run.)
 - **Shared-drive `corpora=drive` scoping** and **gzip transport** tuning (efficiency only).
 
 ## Troubleshooting

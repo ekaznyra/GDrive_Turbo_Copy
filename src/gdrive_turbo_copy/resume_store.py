@@ -21,7 +21,7 @@ from typing import Any
 from .logging_utils import get_logger, log_event
 from .models import TOOL_TAG, DriveClientProtocol, FailedItem, now_iso
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 LOG_PREFIX = ".gdrive_copy_resume"
 LOG_SUFFIX = ".json"
 FAILED_REPORT_NAME = "failed_report.json"
@@ -40,6 +40,7 @@ class ResumeState:
     run_id: str | None = None
     copied_ids: set[str] = field(default_factory=set)
     folder_map: dict[str, str] = field(default_factory=dict)
+    completed_folders: set[str] = field(default_factory=set)
     failed_items: list[FailedItem] = field(default_factory=list)
     copied_bytes: int = 0
     created_at: str = field(default_factory=now_iso)
@@ -58,6 +59,7 @@ def _canonical_payload(state: ResumeState) -> dict[str, Any]:
         "run_id": state.run_id,
         "copied_file_ids": sorted(state.copied_ids),
         "folder_map": dict(sorted(state.folder_map.items())),
+        "completed_folder_ids": sorted(state.completed_folders),
         "failed_items": [fi.to_dict() for fi in state.failed_items],
         "copied_bytes": int(state.copied_bytes),
         "created_at": state.created_at,
@@ -94,6 +96,9 @@ def migrate(raw: dict[str, Any]) -> dict[str, Any]:
         data.setdefault("source_root_id", None)
         data.setdefault("dest_root_id", None)
         data.setdefault("run_id", None)
+    if version < 4:
+        # v4 adds fully-copied subtree tracking for fast resume.
+        data.setdefault("completed_folder_ids", [])
     data["schema_version"] = CURRENT_SCHEMA_VERSION
     return data
 
@@ -117,6 +122,7 @@ def deserialize(data: bytes | str, *, verify_integrity: bool = True) -> ResumeSt
         run_id=migrated.get("run_id"),
         copied_ids=copied,
         folder_map=dict(migrated.get("folder_map") or {}),
+        completed_folders=set(migrated.get("completed_folder_ids") or []),
         failed_items=failed,
         copied_bytes=int(migrated.get("copied_bytes", 0) or 0),
         created_at=migrated.get("created_at") or now_iso(),
@@ -187,6 +193,7 @@ class ResumeStore:
             merged.copied_ids |= state.copied_ids
             for src, dst in state.folder_map.items():
                 merged.folder_map.setdefault(src, dst)
+            merged.completed_folders |= state.completed_folders
             merged.failed_items.extend(state.failed_items)
             if entry["name"] == self.own_log_name:
                 self.own_log_file_id = entry["id"]

@@ -74,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Batch sibling folders into one list call (faster on wide trees; opt-in).",
     )
     parser.add_argument(
+        "--skip-completed-folders", action="store_true",
+        help="On resume, skip re-listing subtrees copied in full last run (faster; "
+             "won't pick up newly-added files in those subtrees; default-path only).",
+    )
+    parser.add_argument(
         "--no-colab", action="store_true",
         help="Skip Colab auth; use ADC / service-account credentials.",
     )
@@ -100,6 +105,7 @@ def config_from_args(args: argparse.Namespace) -> CopyConfig:
         ignore_default_visibility=args.ignore_default_visibility,
         keep_revision_forever=args.keep_revision_forever,
         fast_list=args.fast_list,
+        skip_completed_folders=args.skip_completed_folders,
     )
 
 
@@ -116,6 +122,8 @@ def _print_summary(result) -> None:
     else:
         print(f"  Copied:   {result.copied_count} files")
         print(f"  Skipped:  {result.skipped_count} (already present / copied)")
+        if result.skipped_complete_folders:
+            print(f"  Skipped folders: {result.skipped_complete_folders} (complete subtrees, not re-listed)")
         print(f"  Failed:   {len(result.failed_items)} (this run)")
         if result.previous_failed_items:
             print(f"  Prior failures unresolved: {len(result.previous_failed_items)}")

@@ -123,6 +123,20 @@ class DestinationIndex:
 # --- Engine ------------------------------------------------------------------
 
 
+@dataclass
+class _FolderNode:
+    """Structural record of one source folder's direct children, gathered during
+    traversal so a fully-copied subtree can be detected at the end of a run and
+    skipped (not re-listed) on the next resume. ``eligible`` is cleared for
+    folders whose completion we deliberately don't track (e.g. those containing
+    shortcuts), so such a subtree is never skipped."""
+
+    listing_ok: bool = True
+    eligible: bool = True
+    file_eff_ids: set[str] = field(default_factory=set)
+    subfolder_ids: set[str] = field(default_factory=set)
+
+
 def generate_run_id() -> str:
     return uuid.uuid4().hex
 
@@ -155,6 +169,9 @@ class Copier:
         self._copied_session = 0
         self._run_bytes = 0  # bytes reserved/copied this run (drives the size guard)
         self._consec_rate_fail = 0  # consecutive copy ops that exhausted retries on rate limits
+        # Fast-resume bookkeeping (only populated when skip_completed_folders is on):
+        self._tree: dict[str, _FolderNode] = {}
+        self._listing_error_folders: set[str] = set()
 
     # -- public -------------------------------------------------------------
 
@@ -239,6 +256,7 @@ class Copier:
             root_children = self._list_children(
                 source_id, cfg.from_page, cfg.to_page, parent_source_id=source_id
             )
+            self._record_tree_node(source_id, root_children)
             log_event(self.log, logging.INFO, "root_listed", items=len(root_children))
             self._process_level(dest_root_id, root_children, {source_id}, parent_source_id=source_id)
             self._drain_futures()
@@ -249,6 +267,9 @@ class Copier:
             if self._executor is not None:
                 self._executor.shutdown(wait=True)
                 self._executor = None
+            if cfg.skip_completed_folders:
+                # Executor is drained, so copied_ids/failed_items are final.
+                self._state.completed_folders |= self._compute_completed_folders()
             if not cfg.dry_run and dest_root_id:
                 self._save_log(force=True)
 
@@ -474,6 +495,18 @@ class Copier:
         if folder.id in visited:
             log_event(self.log, logging.WARNING, "shortcut_loop_skipped", folder=folder.name, id=folder.id)
             return
+        # Fast resume: a subtree copied in full on a previous run is trusted and
+        # skipped without re-listing. Only for real folders (not shortcut targets),
+        # and only when the user opted in.
+        if (
+            self.config.skip_completed_folders
+            and shortcut_id is None
+            and folder.id in self._state.completed_folders
+        ):
+            with self._lock:
+                self._result.skipped_complete_folders += 1
+            log_event(self.log, logging.INFO, "folder_skip_complete", name=folder.name, id=folder.id)
+            return
         log_event(self.log, logging.INFO, "folder_enter", name=folder.name)
         try:
             sub_dest_id = self._get_or_create_folder(
@@ -489,6 +522,7 @@ class Copier:
             )
             return
         children = self._list_children(folder.id, 0, 0, parent_source_id=folder.id)
+        self._record_tree_node(folder.id, children)
         if children and (sub_dest_id or self.config.dry_run):
             self._process_level(
                 sub_dest_id, children, visited | {folder.id}, parent_source_id=folder.id
@@ -908,6 +942,7 @@ class Copier:
                 )
                 with self._lock:
                     self._result.had_listing_errors = True
+                    self._listing_error_folders.add(folder_id)
                 log_event(self.log, logging.ERROR, "list_failed", folder=folder_id, error=str(exc))
                 break
             page += 1
@@ -938,6 +973,65 @@ class Copier:
         return DestinationIndex.build(items)
 
     # -- bookkeeping --------------------------------------------------------
+
+    def _record_tree_node(self, folder_id: str, children: list[DriveFile]) -> None:
+        """Record a folder's direct children so a fully-copied subtree can be
+        detected at the end of the run. No-op unless fast resume is enabled.
+
+        A folder containing any shortcut is marked ineligible: shortcut targets
+        are keyed differently and we conservatively never skip such a subtree.
+        """
+        if not self.config.skip_completed_folders:
+            return
+        node = _FolderNode(listing_ok=folder_id not in self._listing_error_folders)
+        for src in children:
+            if src.is_shortcut:
+                node.eligible = False
+            elif src.is_folder:
+                node.subfolder_ids.add(src.id)
+            else:
+                node.file_eff_ids.add(src.id)
+        with self._lock:
+            self._tree[folder_id] = node
+
+    def _compute_completed_folders(self) -> set[str]:
+        """Return source folders whose entire subtree was verified-copied this run.
+
+        Conservative by construction: a folder counts only if its listing was
+        clean, it is eligible, every file child is in ``copied_ids`` and not
+        failed, and every subfolder is itself complete (or already known complete
+        from a prior run). Anything uncertain is treated as *incomplete*, so a
+        folder is never skipped unless it was provably finished.
+        """
+        copied = self._state.copied_ids
+        failed_ids: set[str] = set()
+        for fi in list(self._result.failed_items) + list(self._result.previous_failed_items):
+            for key in (fi.effective_source_id, fi.source_id, fi.source_shortcut_id, fi.shortcut_target_id):
+                if key:
+                    failed_ids.add(key)
+
+        known = self._state.completed_folders
+        memo: dict[str, bool] = {}
+
+        def is_complete(fid: str, stack: frozenset[str]) -> bool:
+            if fid in known:  # already proven complete on a prior run (may be skipped now)
+                return True
+            if fid in memo:
+                return memo[fid]
+            if fid in stack:  # shortcut/parent cycle guard: don't recurse forever
+                return False
+            node = self._tree.get(fid)
+            if node is None or not node.listing_ok or not node.eligible:
+                memo[fid] = False
+                return False
+            ok = all(eid in copied and eid not in failed_ids for eid in node.file_eff_ids)
+            if ok:
+                child_stack = stack | {fid}
+                ok = all(is_complete(sub, child_stack) for sub in node.subfolder_ids)
+            memo[fid] = ok
+            return ok
+
+        return {fid for fid in self._tree if is_complete(fid, frozenset())}
 
     def _mark_copied(self, eff_id: str, size: int) -> None:
         with self._lock:
@@ -1051,6 +1145,7 @@ class Copier:
         self._state.copied_ids |= loaded.copied_ids
         for src, dst in loaded.folder_map.items():
             self._state.folder_map.setdefault(src, dst)
+        self._state.completed_folders |= loaded.completed_folders
         self._state.copied_bytes = max(self._state.copied_bytes, loaded.copied_bytes)
         if loaded.created_at:
             self._state.created_at = loaded.created_at

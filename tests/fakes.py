@@ -50,11 +50,13 @@ class FakeDriveClient:
         self.copy_error_on_call: int | None = None
         self.copy_error: Exception | None = None
         self.copy_errors_by_call: dict[int, Exception] = {}  # 1-based call number -> error
+        self.copy_fail_ids: set[str] = set()  # source file ids that should fail to copy
         self.create_calls = 0
         self.create_error_on_call: int | None = None
         self.create_error: Exception | None = None
         self.multi_returns_empty = False  # simulate Drive's flaky empty multi-parent OR
         self.multi_calls = 0
+        self.list_children_calls: list[str] = []  # folder ids passed to list_children
 
     # -- builders (test helpers) -------------------------------------------
 
@@ -96,6 +98,7 @@ class FakeDriveClient:
     # -- protocol ----------------------------------------------------------
 
     def list_children(self, folder_id, *, exclude_substrings: Iterable[str] = (), order_by=None, page_token=None):
+        self.list_children_calls.append(folder_id)
         excludes = [s for s in exclude_substrings if s]
         out = []
         for node in self.nodes.values():
@@ -144,6 +147,8 @@ class FakeDriveClient:
         }
         if self.copy_calls in self.copy_errors_by_call:
             raise self.copy_errors_by_call[self.copy_calls]
+        if file_id in self.copy_fail_ids:
+            raise make_error(403, "insufficientFilePermissions", "denied")
         if self.copy_error_on_call is not None and self.copy_calls >= self.copy_error_on_call:
             raise self.copy_error or make_error(403, "dailyLimitExceeded", "Daily quota exceeded")
         src = self.nodes[file_id]

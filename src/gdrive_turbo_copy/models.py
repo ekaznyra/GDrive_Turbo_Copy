@@ -173,6 +173,7 @@ class CopyConfig:
     ignore_default_visibility: bool = False  # opt-in: bypass domain default sharing
     keep_revision_forever: bool = False  # opt-in: pin the copy's head revision
     fast_list: bool = False  # opt-in: batch sibling folders into one list call
+    skip_completed_folders: bool = False  # opt-in: on resume, skip re-listing subtrees copied in full
 
     def validate(self) -> list[str]:
         from .urls import extract_folder_id
@@ -243,6 +244,7 @@ class FailedItem:
 class CopyResult:
     copied_count: int = 0
     skipped_count: int = 0
+    skipped_complete_folders: int = 0
     failed_items: list[FailedItem] = field(default_factory=list)
     previous_failed_items: list[FailedItem] = field(default_factory=list)
     would_copy_count: int = 0
