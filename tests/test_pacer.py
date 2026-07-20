@@ -1,4 +1,4 @@
-from gdrive_turbo_copy.pacer import NullPacer, TokenBucket, make_pacer
+from gdrive_turbo_copy.pacer import AdaptivePacer, NullPacer, TokenBucket, make_pacer
 
 
 class Clock:
@@ -46,4 +46,86 @@ def test_rate_is_enforced_over_many_acquires():
 def test_null_pacer_and_make_pacer_disabled():
     assert isinstance(make_pacer(0), NullPacer)
     assert make_pacer(0).acquire() == 0.0
-    assert isinstance(make_pacer(10), TokenBucket)
+    # make_pacer returns an AdaptivePacer (a TokenBucket subclass) when enabled.
+    pacer = make_pacer(10)
+    assert isinstance(pacer, TokenBucket)
+    assert isinstance(pacer, AdaptivePacer)
+
+
+def test_null_pacer_feedback_is_noop():
+    pacer = NullPacer()
+    # These must exist and do nothing so the client can call them unconditionally.
+    pacer.record_throttle(retry_after=5)
+    pacer.record_success()
+    assert pacer.acquire() == 0.0
+
+
+def test_adaptive_starts_at_ceiling():
+    clock = Clock()
+    pacer = AdaptivePacer(10, monotonic=clock.monotonic, sleep=clock.sleep)
+    assert pacer.rate == 10.0
+    assert pacer.max_rate == 10.0
+
+
+def test_adaptive_throttle_halves_rate_with_floor():
+    clock = Clock()
+    pacer = AdaptivePacer(
+        8, min_rate=1.0, backoff=0.5, monotonic=clock.monotonic, sleep=clock.sleep
+    )
+    pacer.record_throttle()
+    assert pacer.rate == 4.0
+    pacer.record_throttle()
+    assert pacer.rate == 2.0
+    pacer.record_throttle()
+    assert pacer.rate == 1.0
+    pacer.record_throttle()
+    assert pacer.rate == 1.0  # floored at min_rate, never below
+
+
+def test_adaptive_recovers_additively_after_successes():
+    clock = Clock()
+    pacer = AdaptivePacer(
+        10, backoff=0.5, recover_step=1.0, recover_after=3,
+        monotonic=clock.monotonic, sleep=clock.sleep,
+    )
+    pacer.record_throttle()  # 10 -> 5
+    assert pacer.rate == 5.0
+    for _ in range(2):
+        pacer.record_success()
+    assert pacer.rate == 5.0  # not enough successes yet
+    pacer.record_success()  # 3rd success -> +1
+    assert pacer.rate == 6.0
+
+
+def test_adaptive_recover_never_exceeds_ceiling():
+    clock = Clock()
+    pacer = AdaptivePacer(
+        3, backoff=0.5, recover_step=1.0, recover_after=1,
+        monotonic=clock.monotonic, sleep=clock.sleep,
+    )
+    pacer.record_throttle()  # 3 -> 1.5
+    for _ in range(20):
+        pacer.record_success()
+    assert pacer.rate == 3.0  # clamped at max_rate
+
+
+def test_adaptive_retry_after_opens_global_cooldown():
+    clock = Clock()
+    pacer = AdaptivePacer(10, monotonic=clock.monotonic, sleep=clock.sleep)
+    # A Retry-After of 30s must make the *next* acquire wait out the full window.
+    pacer.record_throttle(retry_after=30)
+    slept = pacer.acquire()
+    assert slept >= 30.0
+    assert clock.slept and clock.slept[0] == 30.0
+
+
+def test_adaptive_throttle_shrinks_burst_capacity():
+    clock = Clock()
+    pacer = AdaptivePacer(
+        10, backoff=0.5, monotonic=clock.monotonic, sleep=clock.sleep
+    )
+    assert pacer.capacity == 10.0
+    pacer.record_throttle()  # rate 10 -> 5
+    assert pacer.capacity == 5.0
+    # Tokens are clamped to the new capacity so a lowered rate is enforced.
+    assert pacer._tokens <= 5.0
