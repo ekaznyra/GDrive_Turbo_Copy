@@ -53,9 +53,10 @@ Interrupted? Just run the same command again — it resumes and skips what's alr
 |---|---|
 | **Server-side `files.copy`** — Google copies on its servers, zero download/upload bandwidth | **Idempotent**: re-runs detect & skip copied items via `appProperties` even if the log is gone |
 | **Multi-threaded** (1–16 workers) with **adaptive** back-off/recovery | **Post-copy verification** of every file (id / name / MIME / md5 / size) before marking done |
-| **Proactive rate pacing** (token bucket, ~10 req/s) so most 429s never happen | **Resume log** is schema-versioned, **SHA-256 integrity-hashed**, written atomically |
-| **`--fast-list`** ORs up to 50 sibling folders into one list call on wide trees | **Quota guard** reserves bytes under a lock and **stops gracefully** before the cap |
-| Minimal API payloads via field masks | **Never silently skips** a folder (multi-parent listing has a per-folder fallback) |
+| **Adaptive rate pacing** (AIMD token bucket): starts at ~10 req/s, auto-tunes down on throttling and back up on success | **Resume log** is schema-versioned, **SHA-256 integrity-hashed**, written atomically |
+| **Global `Retry-After` cooldown** — when Drive says "slow down", *all* workers wait out the window together | **Quota guard** reserves bytes under a lock and **stops gracefully** before the cap |
+| **`--fast-list`** ORs up to 50 sibling folders into one list call on wide trees | **Never silently skips** a folder (multi-parent listing has a per-folder fallback) |
+| Minimal API payloads via field masks | **Circuit breaker** bails after sustained rate-limiting instead of hammering for 24h |
 
 Also: Shared Drive support, shortcut resolution + loop detection, metadata fidelity (`modifiedTime`/`description`), exclude filters, dry-run, and a `failed_report.json` for anything that couldn't be copied.
 
@@ -77,7 +78,7 @@ flowchart TD
     V -->|fail| FR["Record in failed_report.json"]
 ```
 
-Transient errors (429, 5xx, rate limits) are retried with **full-jitter exponential backoff** honoring `Retry-After`; fatal errors (permission, missing, storage/daily quota) are **never retried** and are reported.
+Transient errors (429, 5xx, rate limits) are retried with **full-jitter exponential backoff** honoring `Retry-After`. Every throttle also feeds back into the **adaptive pacer** (lower the sustained rate now, recover later) and — when a `Retry-After` is present — opens a **global cooldown** so every worker pauses together. Fatal errors (permission, missing, storage/daily quota) are **never retried** and are reported.
 
 ## Architecture
 
@@ -114,7 +115,7 @@ flowchart LR
 |---|---|
 | [`models.py`](src/gdrive_turbo_copy/models.py) | Dataclasses, enums, constants, `DriveClientProtocol`, config validation |
 | [`retry.py`](src/gdrive_turbo_copy/retry.py) | Error classification, full-jitter backoff, `Retry-After`, structured retry events |
-| [`pacer.py`](src/gdrive_turbo_copy/pacer.py) | Token-bucket proactive rate limiter |
+| [`pacer.py`](src/gdrive_turbo_copy/pacer.py) | Adaptive (AIMD) token-bucket rate limiter + global `Retry-After` cooldown |
 | [`concurrency.py`](src/gdrive_turbo_copy/concurrency.py) | Adaptive, per-operation concurrency control |
 | [`resume_store.py`](src/gdrive_turbo_copy/resume_store.py) | Atomic, integrity-hashed, schema-migrating resume log |
 | [`drive_client.py`](src/gdrive_turbo_copy/drive_client.py) | Real Drive API client (Google libs live here + `auth.py`) |
@@ -165,7 +166,7 @@ or set `GDRIVE_SERVICE_ACCOUNT_FILE=/path/key.json`. No secrets are stored in co
 |---|---|---|
 | `--workers` | `4` | Parallel workers (1–16; >8 warns). |
 | `--max-size-gb` | `730` | Stop before copying more than this; `0` = unlimited. |
-| `--max-tps` | `10` | Proactive client-side rate cap (req/s); `0` disables pacing. |
+| `--max-tps` | `10` | Rate **ceiling** (req/s); the pacer auto-tunes the sustained rate down on throttling and back up on success. `0` disables pacing. |
 | `--verify-mode` | `checksum` | `checksum` (strict md5), `name_size`, or `name_only`. |
 | `--exclude` | – | Comma-separated name fragments to skip (`tmp,.log`). |
 | `--from-page` / `--to-page` | `0` | Paginate the **root** folder's direct children (`0` = no limit). |

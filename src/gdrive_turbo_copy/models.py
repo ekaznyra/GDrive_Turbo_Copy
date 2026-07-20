@@ -33,6 +33,8 @@ DEFAULT_MAX_COPY_SIZE_GB = 730.0
 MAX_SINGLE_FILE_COPY_GB = 750.0
 # Proactive client-side pacing: Drive's sustained write ceiling is low
 # (~10 ops/sec/project). A token bucket below this avoids most 429s entirely.
+# This is the *ceiling*; the AdaptivePacer starts here and auto-tunes the actual
+# sustained rate down on throttling and back up on sustained success (AIMD).
 DEFAULT_MAX_TPS = 10.0
 # Stop gracefully after this many consecutive copy ops exhaust retries on rate
 # limiting (a strong signal the daily/server-side-copy cap is hit; retrying for

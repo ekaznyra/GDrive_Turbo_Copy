@@ -166,6 +166,7 @@ class RetryEvent:
     status: int | None
     delay: float
     message: str
+    retry_after: float | None = None
 
 
 def execute_with_retry(
@@ -212,6 +213,7 @@ def execute_with_retry(
                 status=status,
                 delay=delay,
                 message=message[:200],
+                retry_after=retry_after,
             )
             log_event(
                 logger,

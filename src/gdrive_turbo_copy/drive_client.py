@@ -70,13 +70,19 @@ class DriveClient:
 
     def _exec(self, op: OperationType, build_request: Callable[[], object]):
         def on_event(event: RetryEvent) -> None:
-            if self._controller is None:
-                return
-            if event.status == 429 or event.reason.lower() in (
+            # A 429 or a rate-limit 403 means "slow down": tell both the
+            # concurrency controller and the adaptive pacer to back off. Any
+            # Retry-After is forwarded so the pacer can open a global cooldown.
+            is_throttle = event.status == 429 or event.reason.lower() in (
                 "ratelimitexceeded",
                 "userratelimitexceeded",
-            ):
+            )
+            if not is_throttle:
+                return
+            if self._controller is not None:
                 self._controller.record_throttle(op)
+            if self._pacer is not None:
+                self._pacer.record_throttle(retry_after=event.retry_after)
 
         def call():
             # Proactive pacing applies to every actual HTTP attempt (incl. retries).
@@ -93,6 +99,8 @@ class DriveClient:
         )
         if self._controller is not None:
             self._controller.record_success(op)
+        if self._pacer is not None:
+            self._pacer.record_success()
         return result
 
     # -- protocol -----------------------------------------------------------
