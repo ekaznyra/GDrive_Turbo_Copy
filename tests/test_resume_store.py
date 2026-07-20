@@ -21,6 +21,7 @@ def test_round_trip():
     state = ResumeState(
         account="me@example.com", source_root_id="src", dest_root_id="dst", run_id="r1",
         copied_ids={"a", "b", "c"}, folder_map={"s1": "d1"},
+        completed_folders={"f1", "f2"},
         failed_items=[FailedItem("x", "x.bin", "application/octet-stream", "copyFailed", "boom")],
         copied_bytes=12345,
     )
@@ -28,6 +29,7 @@ def test_round_trip():
     back = deserialize(blob)
     assert back.copied_ids == {"a", "b", "c"}
     assert back.folder_map == {"s1": "d1"}
+    assert back.completed_folders == {"f1", "f2"}
     assert back.copied_bytes == 12345
     assert back.run_id == "r1"
     assert len(back.failed_items) == 1
@@ -63,6 +65,13 @@ def test_migrate_v2_to_v3():
     assert state.copied_ids == {"a"}
     assert state.copied_bytes == 1024 * 1024
     assert state.run_id is None
+
+
+def test_migrate_v3_to_v4_adds_completed_folders():
+    raw = {"schema_version": 3, "copied_file_ids": ["a"], "folder_map": {}, "copied_bytes": 0}
+    state = deserialize(json.dumps(raw).encode())  # no integrity -> skip check, migrate
+    assert state.schema_version == CURRENT_SCHEMA_VERSION
+    assert state.completed_folders == set()
 
 
 def test_legacy_log_without_integrity_loads():
