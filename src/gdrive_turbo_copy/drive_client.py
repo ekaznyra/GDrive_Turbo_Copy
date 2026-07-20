@@ -30,6 +30,9 @@ _FILE_SUBFIELDS = (
 _LIST_FIELDS = f"files({_FILE_SUBFIELDS}),nextPageToken"
 _LIST_FIELDS_WITH_PARENTS = f"files({_FILE_SUBFIELDS},parents),nextPageToken"
 _FILE_FIELDS = f"{_FILE_SUBFIELDS},parents"
+# Enough for the copier to verify a copy straight from the copy response,
+# avoiding a second metadata round-trip per file.
+_COPY_RETURN_FIELDS = "id,name,mimeType,size,md5Checksum,appProperties"
 
 
 def _escape(value: str) -> str:
@@ -180,7 +183,9 @@ class DriveClient:
         keep_revision_forever: bool = False,
     ):
         def build():
-            kwargs = dict(fileId=file_id, body=body, fields="id", supportsAllDrives=True)
+            kwargs = dict(
+                fileId=file_id, body=body, fields=_COPY_RETURN_FIELDS, supportsAllDrives=True
+            )
             if ignore_default_visibility:
                 kwargs["ignoreDefaultVisibility"] = True
             if keep_revision_forever:

@@ -164,7 +164,7 @@ class Copier:
         self._executor: ThreadPoolExecutor | None = None
         self._futures: set = set()
         self._dirty = 0
-        self._flush_every = 50
+        self._flush_every = 50  # base cadence; grows with log size (see _flush_threshold)
         self._progress_every = 25
         self._copied_session = 0
         self._run_bytes = 0  # bytes reserved/copied this run (drives the size guard)
@@ -357,6 +357,18 @@ class Copier:
                 else:
                     self._copy_file(dest_parent_id, target, index, parent_source_id, shortcut_id=src.id)
             elif src.is_folder:
+                # Fast resume: skip a subtree copied in full on a prior run
+                # (opt-in). Mirrors the default path so --fast-list and
+                # --skip-completed-folders compose instead of the latter being
+                # silently ignored. Real folders only (never shortcut targets).
+                if (
+                    self.config.skip_completed_folders
+                    and src.id in self._state.completed_folders
+                ):
+                    with self._lock:
+                        self._result.skipped_complete_folders += 1
+                    log_event(self.log, logging.INFO, "folder_skip_complete", name=src.name, id=src.id)
+                    continue
                 self._enqueue_folder(src, None, dest_parent_id, visited, parent_source_id, pending)
             else:
                 self._submit_file(dest_parent_id, src, index, parent_source_id)
@@ -368,6 +380,9 @@ class Copier:
             if self._stop.is_set():
                 break
             kids = child_map.get(folder.id, [])
+            # Record structure so a fully-copied subtree can be detected at the
+            # end of the run for fast resume (no-op unless the flag is on).
+            self._record_tree_node(folder.id, kids)
             if kids and (sub_dest_id or self.config.dry_run):
                 self._process_level(
                     sub_dest_id, kids, visited | {folder.id}, parent_source_id=folder.id
@@ -679,8 +694,7 @@ class Copier:
             self._handle_copy_exception(exc, src, parent_source_id, shortcut_id, eff_id)
             return
 
-        new_id = created.get("id") if isinstance(created, dict) else None
-        ok, detail = self._verify_copy(new_id, src, shortcut_id)
+        ok, detail = self._verify_copy(created, src, shortcut_id)
         if not ok:
             self._release_reservation(size)
             with self._lock:
@@ -753,17 +767,48 @@ class Copier:
         )
 
     def _verify_copy(
-        self, new_id: str | None, src: DriveFile, shortcut_id: str | None
+        self, created: object, src: DriveFile, shortcut_id: str | None
     ) -> tuple[bool, str]:
+        new_id = created.get("id") if isinstance(created, dict) else None
         if not new_id:
             return False, "copy returned no file id"
-        try:
-            meta = self.client.get_metadata(
-                new_id, fields="id,name,mimeType,size,md5Checksum,appProperties"
-            )
-        except Exception as exc:  # noqa: BLE001
-            return False, f"could not fetch copied file metadata: {exc}"
-        dst = DriveFile.from_api(meta)
+        # Verify straight from the copy response when it carries the fields we
+        # need — this saves one metadata GET per file, ~halving API calls under
+        # Drive's low write ceiling. Fall back to a fetch only if a field we
+        # must check is absent (older/partial responses).
+        dst = DriveFile.from_api(created)
+        if not self._response_verifiable(dst, src):
+            try:
+                meta = self.client.get_metadata(
+                    new_id, fields="id,name,mimeType,size,md5Checksum,appProperties"
+                )
+            except Exception as exc:  # noqa: BLE001
+                return False, f"could not fetch copied file metadata: {exc}"
+            dst = DriveFile.from_api(meta)
+        return self._compare_copy(dst, src, shortcut_id)
+
+    @staticmethod
+    def _response_verifiable(dst: DriveFile, src: DriveFile) -> bool:
+        """True if ``dst`` (from the copy response) carries enough to verify.
+
+        Name, MIME and the idempotency appProperty are always required; a
+        checksum/size is required only for binary files (native Docs/Sheets have
+        neither). When md5 is expected but missing we defer to a metadata fetch
+        so the strong check is never silently downgraded to size-only.
+        """
+        if not dst.name or not dst.mime_type or "source_file_id" not in dst.app_properties:
+            return False
+        if src.is_google_native or (src.md5 is None and src.size is None):
+            return True
+        if src.md5:
+            return dst.md5 is not None
+        if src.size is not None:
+            return dst.size is not None
+        return True
+
+    def _compare_copy(
+        self, dst: DriveFile, src: DriveFile, shortcut_id: str | None
+    ) -> tuple[bool, str]:
         ap = dst.app_properties
         if ap.get("source_file_id") != src.id:
             return False, "appProperties.source_file_id mismatch"
@@ -1095,11 +1140,29 @@ class Copier:
                 f for f in self._state.failed_items if f not in self._result.previous_failed_items
             ]
 
+    def _flush_threshold(self) -> int:
+        """How many changes to batch before rewriting the resume log.
+
+        The whole log is re-serialized and re-uploaded on every flush, so a
+        fixed cadence makes total upload volume grow quadratically with the
+        number of copied files. Widening the interval as the log grows keeps
+        that volume roughly linear while still bounding how much progress a
+        crash can lose. Must be called while holding ``self._lock``.
+        """
+        n = len(self._state.copied_ids)
+        if n >= 50_000:
+            return 2000
+        if n >= 10_000:
+            return 1000
+        if n >= 2_000:
+            return 200
+        return self._flush_every
+
     def _maybe_flush(self) -> None:
         if self.config.dry_run:
             return
         with self._lock:
-            due = self._dirty >= self._flush_every
+            due = self._dirty >= self._flush_threshold()
         if due:
             self._save_log(force=False)
 
@@ -1107,7 +1170,7 @@ class Copier:
         if self.config.dry_run or not self._state.dest_root_id:
             return
         with self._lock:
-            if not force and self._dirty < self._flush_every:
+            if not force and self._dirty < self._flush_threshold():
                 return
             self._dirty = 0
         try:

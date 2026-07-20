@@ -142,3 +142,56 @@ def test_google_native_file_verified_without_md5():
     assert result.copied_count == 1
     assert result.completed
     assert not result.failed_items
+
+
+def test_copy_verified_from_response_without_extra_metadata_fetch():
+    c = FakeDriveClient()
+    src_root = c.add_folder("SourceRoot")
+    dst_parent = c.add_folder("DestParent")
+    src_file = c.add_file("a.txt", src_root, size=3, md5="ma", mime="text/plain")
+    result = Copier(c, _cfg(src_root, dst_parent)).run()
+    assert result.copied_count == 1 and result.completed and not result.failed_items
+    # The copied file's own id must never be fetched: verification uses the
+    # fields already returned by files.copy (the source is fetched once for its
+    # root metadata, which is unrelated).
+    copied = next(
+        n for n in c.nodes.values()
+        if (n.get("appProperties") or {}).get("source_file_id") == src_file
+    )
+    assert copied["id"] not in c.get_metadata_calls
+
+
+def test_copy_falls_back_to_metadata_fetch_when_md5_missing_in_response():
+    # Simulate a copy response that omits md5 (Drive occasionally lags on
+    # computing it): the copier must fetch metadata so the md5 check is not
+    # silently downgraded to a size-only match.
+    c = FakeDriveClient()
+    src_root = c.add_folder("SourceRoot")
+    dst_parent = c.add_folder("DestParent")
+    src_file = c.add_file("a.txt", src_root, size=3, md5="ma", mime="text/plain")
+
+    real_copy = c.copy_file
+
+    def copy_without_md5(file_id, body, **kw):
+        created = real_copy(file_id, body, **kw)
+        created.pop("md5Checksum", None)  # response lacks the checksum
+        return created
+
+    c.copy_file = copy_without_md5
+    result = Copier(c, _cfg(src_root, dst_parent)).run()
+    assert result.copied_count == 1 and result.completed and not result.failed_items
+    copied = next(
+        n for n in c.nodes.values()
+        if (n.get("appProperties") or {}).get("source_file_id") == src_file
+    )
+    assert copied["id"] in c.get_metadata_calls  # fallback fetch happened
+
+
+def test_flush_threshold_widens_as_log_grows():
+    c = FakeDriveClient()
+    src_root = c.add_folder("SourceRoot")
+    dst_parent = c.add_folder("DestParent")
+    copier = Copier(c, _cfg(src_root, dst_parent))
+    for count, expected in [(0, 50), (1999, 50), (2000, 200), (10_000, 1000), (50_000, 2000)]:
+        copier._state.copied_ids = {f"id{i}" for i in range(count)}
+        assert copier._flush_threshold() == expected
